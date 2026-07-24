@@ -54,9 +54,21 @@ def _strip_code_fence(text):
     return text.strip()
 
 
-def coach_reply(history):
-    """history: list of {"role": "user"|"assistant", "text": str}, oldest first."""
-    input_messages = [{"role": h["role"], "content": h["text"]} for h in history]
+def coach_reply(history, context_text=None):
+    """history: list of {"role": "user"|"assistant", "text": str}, oldest
+    first. context_text, if given, is injected as a system message ahead
+    of the conversation - not saved to chat history - so the agent can
+    ground answers in the user's current stats (steps, points, weather)
+    without that bookkeeping cluttering the visible chat log.
+
+    Every item needs an explicit "type": "message" - the API can infer
+    it for a single bare {role, content} item, but mixing in a second
+    item (e.g. this system message plus the conversation) makes it fail
+    to infer the type on the later item(s) with a 400 error."""
+    input_messages = []
+    if context_text:
+        input_messages.append({"type": "message", "role": "system", "content": context_text})
+    input_messages += [{"type": "message", "role": h["role"], "content": h["text"]} for h in history]
     return _call_agent(input_messages)
 
 

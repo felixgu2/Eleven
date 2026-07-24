@@ -8,9 +8,12 @@
   <span class="points-chip">⭐ {{ user['points'] }}</span>
 </div>
 <p class="full-width" style="color:var(--text-muted); margin-top:0; font-size:14px;">Get outside, earn badges, and keep moving.</p>
-{% if weather %}
-<div class="weather-chip full-width" id="weather-chip" data-source="{{ weather.source }}">{{ weather.emoji }} {{ weather.temp_f }}°F · {{ weather.label }} · {{ user['city'] }}</div>
-{% endif %}
+<div class="full-width" style="display:flex; gap:8px; flex-wrap:wrap;">
+  {% if weather %}
+  <div class="weather-chip" id="weather-chip" data-source="{{ weather.source }}">{{ weather.emoji }} {{ weather.temp_f }}°F · {{ weather.label }} · {{ user['city'] }}</div>
+  {% endif %}
+  <div class="weather-chip" id="steps-chip">🚶 {{ steps }} steps today</div>
+</div>
 
 <div class="mission-card full-width">
   <div class="kicker">🗺️ Walking Map</div>

@@ -55,3 +55,14 @@ CREATE TABLE IF NOT EXISTS badges (
 );
 CREATE INDEX IF NOT EXISTS idx_badges_user_date ON badges (user_id, session_date);
 CREATE INDEX IF NOT EXISTS idx_badges_user_status ON badges (user_id, status);
+
+-- Walking distance accumulated from consecutive live GPS fixes (see the
+-- location_update WebSocket handler in app.py). Step count is derived
+-- from distance_m at read time rather than stored, so it can't drift.
+CREATE TABLE IF NOT EXISTS daily_activity (
+    user_id TEXT NOT NULL,
+    session_date TEXT NOT NULL,
+    distance_m REAL NOT NULL DEFAULT 0,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, session_date)
+);

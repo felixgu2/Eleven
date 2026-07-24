@@ -36,6 +36,10 @@ DAILY_BADGE_COUNT = 6       # hard cap on badges spawned (and therefore claimabl
 BADGE_TOPUP_BATCH = 1       # add one at a time so new badges feel like a gradual discovery
 BADGE_INITIAL_BATCH = 2     # first spawn of the day gives a couple of choices right away
 
+STEP_LENGTH_M = 0.762       # average adult stride, used to estimate steps from walked distance
+MIN_STEP_MOVEMENT_M = 2     # ignore GPS jitter smaller than this between fixes
+MAX_STEP_JUMP_M = 120       # ignore big jumps (fresh GPS fix, teleport) - not real walking
+
 # Live GPS position per user, kept in memory and updated over the
 # location_update WebSocket event (see near the bottom of this file).
 # Single-process assumption, same as the SQLite file used elsewhere.
@@ -140,6 +144,17 @@ def user_location():
     reliably persisted back to the browser once the connection upgrades
     past the initial HTTP handshake (no response to attach a cookie to)."""
     return _live_locations.get(g.user_id)
+
+
+def today_activity(db, user_id):
+    """(steps, distance_m) walked today, derived from GPS distance
+    accumulated via the location_update WebSocket event."""
+    row = db.execute(
+        "SELECT distance_m FROM daily_activity WHERE user_id = ? AND session_date = ?",
+        (user_id, today_str()),
+    ).fetchone()
+    distance_m = row["distance_m"] if row else 0
+    return round(distance_m / STEP_LENGTH_M), distance_m
 
 
 def current_weather():
@@ -335,14 +350,33 @@ def handle_socket_disconnect():
 def handle_location_update(data):
     """Same job as a POST /location/update would have done, but pushed
     over the page's persistent WebSocket connection instead of opening a
-    fresh HTTP request every few seconds while the user walks."""
+    fresh HTTP request every few seconds while the user walks. Also
+    accumulates today's walked distance from the gap between consecutive
+    fixes, filtered to a sane walking-speed range so GPS jitter (too
+    small) and a fresh-fix jump (too big) don't get counted as steps."""
     user_id = _socket_sid_users.get(request.sid)
     if not user_id:
         return
     data = data or {}
     lat, lon = data.get("lat"), data.get("lon")
-    if lat is not None and lon is not None:
-        _live_locations[user_id] = (lat, lon)
+    if lat is None or lon is None:
+        return
+
+    prev = _live_locations.get(user_id)
+    _live_locations[user_id] = (lat, lon)
+    if prev:
+        moved_m = badge_engine.haversine_m(prev[0], prev[1], lat, lon)
+        if MIN_STEP_MOVEMENT_M <= moved_m <= MAX_STEP_JUMP_M:
+            db = get_db()
+            db.execute(
+                """INSERT INTO daily_activity (user_id, session_date, distance_m)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(user_id, session_date)
+                   DO UPDATE SET distance_m = distance_m + excluded.distance_m,
+                                 updated_at = CURRENT_TIMESTAMP""",
+                (user_id, today_str(), moved_m),
+            )
+            db.commit()
 
 
 @app.route("/api/weather")
@@ -381,6 +415,7 @@ def dashboard():
         "SELECT status FROM badges WHERE user_id = ? AND session_date = ?", (user_id, today_str())
     ).fetchall()
     badges_claimed = sum(1 for b in badges_today if b["status"] == "claimed")
+    steps, _ = today_activity(db, user_id)
 
     return render_template(
         "dashboard.html",
@@ -390,6 +425,7 @@ def dashboard():
         mission=mission,
         badges_claimed=badges_claimed,
         badges_total=len(badges_today),
+        steps=steps,
     )
 
 
@@ -400,6 +436,21 @@ def dashboard():
 COACH_HISTORY_LIMIT = 20
 
 
+def coach_stats_context(profile, steps, distance_m, badges_claimed_today, weather_now):
+    lines = [
+        "You are replying inside a short chat bubble UI, not writing a report. "
+        "Keep replies SHORT and SIMPLE: 1-3 sentences, plain conversational language, "
+        "no headers or bullet lists unless the user explicitly asks for a list. "
+        "Ground your answer in the stats below whenever the question relates to them "
+        "(e.g. steps, activity, progress) instead of speaking generically.",
+        f"Today so far: {steps} steps (~{distance_m / 1000:.1f} km walked), "
+        f"{badges_claimed_today} walking badge(s) claimed, {profile.get('points') or 0} total points.",
+    ]
+    if weather_now:
+        lines.append(f"Weather right now: {weather_now['label']}, {weather_now['temp_f']}°F.")
+    return "\n".join(lines)
+
+
 @app.route("/coach")
 def coach_page():
     db = get_db()
@@ -407,7 +458,8 @@ def coach_page():
         "SELECT * FROM coach_messages WHERE user_id = ? ORDER BY id", (g.user_id,)
     ).fetchall()
     messages = [{"sender": r["sender"], "text": r["text"]} for r in rows]
-    return render_template("coach.html", messages=messages)
+    steps, _ = today_activity(db, g.user_id)
+    return render_template("coach.html", messages=messages, steps=steps)
 
 
 @app.route("/coach/message", methods=["POST"])
@@ -432,8 +484,17 @@ def coach_message():
         for r in reversed(history_rows)
     ]
 
+    steps, distance_m = today_activity(db, user_id)
+    badges_claimed_today = db.execute(
+        "SELECT COUNT(*) AS c FROM badges WHERE user_id = ? AND session_date = ? AND status = 'claimed'",
+        (user_id, today_str()),
+    ).fetchone()["c"]
+    context_text = coach_stats_context(
+        g.profile, steps, distance_m, badges_claimed_today, current_weather()
+    )
+
     try:
-        reply = azure_agent.coach_reply(history)
+        reply = azure_agent.coach_reply(history, context_text=context_text)
     except Exception:
         reply = "Sorry, I couldn't reach the coach right now — please try again in a moment."
 
