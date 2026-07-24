@@ -39,8 +39,7 @@ def _geocode(city):
     return results[0]["latitude"], results[0]["longitude"]
 
 
-def _fetch_live(city):
-    lat, lon = _geocode(city)
+def _fetch_live_by_coords(lat, lon):
     url = "https://api.open-meteo.com/v1/forecast?" + urllib.parse.urlencode(
         {
             "latitude": lat,
@@ -65,9 +64,9 @@ def _fetch_live(city):
     }
 
 
-def _fallback(city):
-    """Deterministic pseudo-weather, stable for a given city + day."""
-    seed = f"{city}-{date.today().isoformat()}"
+def _fallback(seed_key):
+    """Deterministic pseudo-weather, stable for a given place + day."""
+    seed = f"{seed_key}-{date.today().isoformat()}"
     h = int(hashlib.sha256(seed.encode()).hexdigest(), 16)
     code_options = [0, 1, 2, 3, 61, 71, 95]
     code = code_options[h % len(code_options)]
@@ -88,8 +87,25 @@ def get_weather(city):
     if cached and time.time() - cached[0] < _CACHE_SECONDS:
         return cached[1]
     try:
-        result = _fetch_live(city)
+        lat, lon = _geocode(city)
+        result = _fetch_live_by_coords(lat, lon)
     except Exception:
         result = _fallback(city)
     _cache[city] = (time.time(), result)
+    return result
+
+
+def get_weather_by_coords(lat, lon):
+    """Skips geocoding entirely - use when the browser has already shared
+    the user's live GPS position, which is more accurate than their
+    self-reported city."""
+    key = f"geo:{round(lat, 2)},{round(lon, 2)}"
+    cached = _cache.get(key)
+    if cached and time.time() - cached[0] < _CACHE_SECONDS:
+        return cached[1]
+    try:
+        result = _fetch_live_by_coords(lat, lon)
+    except Exception:
+        result = _fallback(key)
+    _cache[key] = (time.time(), result)
     return result

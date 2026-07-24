@@ -11,16 +11,6 @@
 <div class="chat-scroll" id="chat-scroll" style="padding-bottom:60px;">
   {% for m in messages %}
     <div class="bubble {{ m.sender }}">{{ m.text }}</div>
-    {% if m.extra and m.extra.routine %}
-    <div class="routine-card">
-      <h4>Suggested Routine</h4>
-      <div class="meta">{{ m.extra.routine|length }}-Minute Mobility • {{ m.extra.minutes }} min total</div>
-      {% for ex in m.extra.routine %}
-        <div style="font-size:13px; padding:3px 0;">{{ ex.icon }} {{ ex.name }} — {{ ex.duration }} min{% if ex.reps %} • {{ ex.reps }} reps{% endif %}</div>
-      {% endfor %}
-      <a href="{{ url_for('checkin') }}" class="btn btn-secondary btn-sm" style="margin-top:8px;">View Routine</a>
-    </div>
-    {% endif %}
   {% endfor %}
 </div>
 <div class="chat-input-row">
@@ -39,42 +29,40 @@ function addBubble(sender, text) {
   div.className = `bubble ${sender}`;
   div.textContent = text;
   scrollEl.appendChild(div);
+  scrollEl.scrollTop = scrollEl.scrollHeight;
+  return div;
 }
 
-function addRoutineCard(routine, minutes) {
-  const wrap = document.createElement('div');
-  wrap.className = 'routine-card';
-  let html = `<h4>Suggested Routine</h4><div class="meta">${routine.length}-Minute Mobility • ${minutes} min total</div>`;
-  routine.forEach(ex => {
-    html += `<div style="font-size:13px; padding:3px 0;">${ex.icon} ${ex.name} — ${ex.duration} min${ex.reps ? ' • ' + ex.reps + ' reps' : ''}</div>`;
-  });
-  html += `<a href="/checkin" class="btn btn-secondary btn-sm" style="margin-top:8px;">View Routine</a>`;
-  wrap.innerHTML = html;
-  scrollEl.appendChild(wrap);
-}
+const sendBtn = document.getElementById('send-btn');
+const input = document.getElementById('chat-text');
 
 async function sendMessage(text) {
   if (!text.trim()) return;
   addBubble('user', text);
-  scrollEl.scrollTop = scrollEl.scrollHeight;
-  const res = await postJSON("{{ url_for('coach_message') }}", { text });
-  if (res.ok) {
-    addBubble('coach', res.reply);
-    if (res.routine) addRoutineCard(res.routine, res.routine_minutes);
-    scrollEl.scrollTop = scrollEl.scrollHeight;
+  input.value = '';
+  sendBtn.disabled = true;
+  const typingBubble = addBubble('coach', 'Thinking…');
+  typingBubble.style.opacity = '0.6';
+
+  try {
+    const res = await postJSON("{{ url_for('coach_message') }}", { text });
+    typingBubble.remove();
+    if (res.ok) {
+      addBubble('coach', res.reply);
+    } else {
+      addBubble('coach', "Sorry, something went wrong — please try again.");
+    }
+  } catch (e) {
+    typingBubble.remove();
+    addBubble('coach', "Sorry, something went wrong — please try again.");
+  } finally {
+    sendBtn.disabled = false;
   }
 }
 
-const input = document.getElementById('chat-text');
-document.getElementById('send-btn').addEventListener('click', () => {
-  sendMessage(input.value);
-  input.value = '';
-});
+sendBtn.addEventListener('click', () => sendMessage(input.value));
 input.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
-    sendMessage(input.value);
-    input.value = '';
-  }
+  if (e.key === 'Enter') sendMessage(input.value);
 });
 
 // Optional voice input via Web Speech API (press and hold the mic).

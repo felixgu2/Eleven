@@ -2,6 +2,7 @@ import json
 import os
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 from flask import (Flask, g, redirect, render_template, request, session,
@@ -9,15 +10,14 @@ from flask import (Flask, g, redirect, render_template, request, session,
 from supabase_auth.errors import AuthApiError
 from werkzeug.utils import secure_filename
 
-import coach as coach_engine
-import quest_engine
+import azure_agent
+import badge_engine
 from database import get_connection, init_db, seed_new_account
 from health import bmi_category, calculate_age
-from mission_generator import generate_mission
 from nudge_engine import get_nudge, predict_slump_hour
 from plan_engine import EXERCISES, generate_plan
 from supabase_client import get_client
-from weather import get_weather
+from weather import get_weather, get_weather_by_coords
 
 load_dotenv()
 
@@ -35,7 +35,7 @@ KIND_TO_COLUMN = {
     "balance": "balance_pct",
 }
 
-PUBLIC_ENDPOINTS = {"index", "signup", "login", "static"}
+PUBLIC_ENDPOINTS = {"index", "signup", "login", "static", "set_timezone"}
 
 ACTIVITY_LEVELS = [
     ("sedentary", "Sedentary (little to no exercise)"),
@@ -104,17 +104,50 @@ def load_identity():
         return redirect(url_for("login"))
 
 
+def user_tz():
+    try:
+        return ZoneInfo(session.get("tz") or "UTC")
+    except Exception:
+        return ZoneInfo("UTC")
+
+
+def local_now():
+    """Current time in the signed-in user's own browser timezone, not the
+    server's. The browser reports its IANA tz name on every page load
+    (see /timezone) and it's cached in the session."""
+    return datetime.now(user_tz())
+
+
+def local_today():
+    return local_now().date()
+
+
 def today_str():
-    return date.today().isoformat()
+    return local_today().isoformat()
 
 
 def greeting():
-    hour = datetime.now().hour
+    hour = local_now().hour
     if hour < 12:
         return "Good morning"
     if hour < 18:
         return "Good afternoon"
     return "Good evening"
+
+
+def user_location():
+    """(lat, lon) if the browser has shared geolocation this session, else None."""
+    lat, lon = session.get("lat"), session.get("lon")
+    if lat is not None and lon is not None:
+        return lat, lon
+    return None
+
+
+def current_weather():
+    loc = user_location()
+    if loc:
+        return get_weather_by_coords(*loc)
+    return get_weather(g.profile["city"])
 
 
 def get_today_checkin(db, user_id):
@@ -138,13 +171,12 @@ def get_or_create_today_checkin(db, user_id):
 
 
 def get_today_stats(db, user_id):
-    row = db.execute(
-        "SELECT * FROM daily_stats WHERE user_id = ? AND date = ?", (user_id, today_str())
-    ).fetchone()
-    if row:
-        return row
+    # INSERT OR IGNORE avoids a race with concurrent requests both seeing
+    # no row yet and both trying to insert - the UNIQUE(user_id, date)
+    # constraint would otherwise raise IntegrityError on the second one.
     db.execute(
-        "INSERT INTO daily_stats (user_id, date, active_minutes, steps, goal_minutes) VALUES (?, ?, 0, 0, 30)",
+        "INSERT OR IGNORE INTO daily_stats (user_id, date, active_minutes, steps, goal_minutes) "
+        "VALUES (?, ?, 0, 0, 30)",
         (user_id, today_str()),
     )
     db.commit()
@@ -178,17 +210,32 @@ def unread_notification_count(db, user_id):
 def log_event(db, user_id, event_type):
     db.execute(
         "INSERT INTO activity_events (user_id, event_type, hour) VALUES (?, ?, ?)",
-        (user_id, event_type, datetime.now().hour),
+        (user_id, event_type, local_now().hour),
     )
 
 
-def get_or_create_mission(db, user_id, weather_now):
+_FALLBACK_MISSION = {
+    "mission_title": "Gentle Reset",
+    "category": "Mobility",
+    "goal": "Keep today moving with something light and safe",
+    "instructions": ["A short warm-up", "5 minutes of gentle stretching", "A brief cool-down"],
+    "duration_minutes": 10,
+    "difficulty": "Easy",
+    "equipment": "None",
+    "safety_note": "Stop if anything causes pain.",
+    "alternative_mission": None,
+    "encouragement": "Every bit of movement counts today.",
+}
+
+
+def get_or_create_mission(db, user_id, profile, weather_now):
     row = db.execute(
         "SELECT * FROM missions WHERE user_id = ? AND date = ?", (user_id, today_str())
     ).fetchone()
     if row:
         return row
-    yesterday = (date.today() - timedelta(days=1)).isoformat()
+
+    yesterday = (local_today() - timedelta(days=1)).isoformat()
     y_stats = db.execute(
         "SELECT * FROM daily_stats WHERE user_id = ? AND date = ?", (user_id, yesterday)
     ).fetchone()
@@ -196,12 +243,40 @@ def get_or_create_mission(db, user_id, weather_now):
         "SELECT * FROM checkins WHERE user_id = ? AND date = ? ORDER BY id DESC LIMIT 1",
         (user_id, yesterday),
     ).fetchone()
-    pain = y_stats["pain_level"] if y_stats else None
-    sleep_hours = y_checkin["sleep_hours"] if y_checkin else None
-    mission = generate_mission(pain, sleep_hours, weather_now)
+
+    context_lines = []
+    age = calculate_age(profile.get("date_of_birth"))
+    if age:
+        context_lines.append(f"User age: {age}.")
+    if profile.get("bmi"):
+        context_lines.append(f"BMI: {profile['bmi']} ({bmi_category(profile['bmi'])}).")
+    if profile.get("activity_level"):
+        context_lines.append(f"Usual activity level: {profile['activity_level']}.")
+    if y_stats and y_stats["pain_level"] is not None:
+        context_lines.append(f"Yesterday's pain level: {y_stats['pain_level']}/10.")
+    if y_checkin and y_checkin["sleep_hours"] is not None:
+        context_lines.append(f"Last night's sleep: {y_checkin['sleep_hours']:g} hours.")
+    if weather_now:
+        context_lines.append(f"Today's weather: {weather_now['label']}, {weather_now['temp_f']}°F.")
+
+    try:
+        mission = azure_agent.generate_mission_json("\n".join(context_lines))
+    except Exception:
+        mission = _FALLBACK_MISSION
+
+    # INSERT OR IGNORE: if a concurrent request already wrote today's
+    # mission between our SELECT above and here, keep that one instead
+    # of raising a UNIQUE(user_id, date) constraint error.
     db.execute(
-        "INSERT INTO missions (user_id, date, title, narrative) VALUES (?, ?, ?, ?)",
-        (user_id, today_str(), mission["title"], mission["narrative"]),
+        """INSERT OR IGNORE INTO missions (user_id, date, title, category, goal, instructions,
+           duration_minutes, difficulty, equipment, safety_note, alternative_mission, encouragement)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (user_id, today_str(), mission.get("mission_title", "Today's Mission"),
+         mission.get("category"), mission.get("goal"),
+         json.dumps(mission.get("instructions") or []),
+         mission.get("duration_minutes"), mission.get("difficulty"),
+         mission.get("equipment"), mission.get("safety_note"),
+         mission.get("alternative_mission"), mission.get("encouragement")),
     )
     db.commit()
     return db.execute(
@@ -210,8 +285,11 @@ def get_or_create_mission(db, user_id, weather_now):
 
 
 def relative_day_label(iso_timestamp):
-    ts_date = datetime.fromisoformat(iso_timestamp).date()
-    today = date.today()
+    # SQLite's CURRENT_TIMESTAMP is naive UTC; convert to the user's tz
+    # before comparing against their local "today".
+    ts_utc = datetime.fromisoformat(iso_timestamp).replace(tzinfo=ZoneInfo("UTC"))
+    ts_date = ts_utc.astimezone(user_tz()).date()
+    today = local_today()
     if ts_date == today:
         return "Today"
     if ts_date == today - timedelta(days=1):
@@ -297,6 +375,36 @@ def logout():
     return redirect(url_for("index"))
 
 
+@app.route("/timezone", methods=["POST"])
+def set_timezone():
+    """The browser reports its IANA timezone here on every page load so the
+    server can compute 'today' / 'this hour' in the user's own timezone
+    instead of the server's."""
+    tz = (request.get_json(silent=True) or {}).get("tz")
+    if tz:
+        try:
+            ZoneInfo(tz)
+            session["tz"] = tz
+        except Exception:
+            pass
+    return {"ok": True}
+
+
+@app.route("/location/update", methods=["POST"])
+def location_update():
+    payload = request.get_json(silent=True) or {}
+    lat, lon = payload.get("lat"), payload.get("lon")
+    if lat is not None and lon is not None:
+        session["lat"] = lat
+        session["lon"] = lon
+    return {"ok": True}
+
+
+@app.route("/api/weather")
+def api_weather():
+    return current_weather()
+
+
 # --------------------------------------------------------------------------
 # Dashboard
 # --------------------------------------------------------------------------
@@ -320,8 +428,10 @@ def dashboard():
     if stats["goal_minutes"]:
         progress_pct = min(100, round(stats["active_minutes"] / stats["goal_minutes"] * 100))
 
-    weather_now = get_weather(g.profile["city"])
-    mission = get_or_create_mission(db, user_id, weather_now)
+    weather_now = current_weather()
+    mission_row = get_or_create_mission(db, user_id, g.profile, weather_now)
+    mission = dict(mission_row)
+    mission["instructions"] = json.loads(mission["instructions"]) if mission["instructions"] else []
 
     event_hours = [
         r["hour"] for r in db.execute(
@@ -329,11 +439,12 @@ def dashboard():
         ).fetchall()
     ]
     slump_hour = predict_slump_hour(event_hours)
-    nudge = get_nudge(slump_hour, datetime.now().hour, plan_completed_today)
+    nudge = get_nudge(slump_hour, local_now().hour, plan_completed_today)
 
-    quest_today = db.execute(
-        "SELECT * FROM quests WHERE user_id = ? AND date = ?", (user_id, today_str())
-    ).fetchone()
+    badges_today = db.execute(
+        "SELECT status FROM badges WHERE user_id = ? AND session_date = ?", (user_id, today_str())
+    ).fetchall()
+    badges_claimed = sum(1 for b in badges_today if b["status"] == "claimed")
 
     return render_template(
         "dashboard.html",
@@ -347,7 +458,8 @@ def dashboard():
         weather=weather_now,
         mission=mission,
         nudge=nudge,
-        quest=quest_today,
+        badges_claimed=badges_claimed,
+        badges_total=len(badges_today),
     )
 
 
@@ -390,7 +502,7 @@ def checkin():
         sleep_raw = request.form.get("sleep_hours", "")
         sleep_hours = float(sleep_raw) if sleep_raw else None
 
-        weather_now = get_weather(g.profile["city"])
+        weather_now = current_weather()
         plan_location = location
         plan_note = None
         if location == "outdoors" and not weather_now["good_for_outdoors"]:
@@ -429,7 +541,7 @@ def checkin():
         db.commit()
         return redirect(url_for("plan"))
 
-    weather_now = get_weather(g.profile["city"])
+    weather_now = current_weather()
     return render_template("checkin.html", body_regions=BODY_REGIONS, weather=weather_now)
 
 
@@ -548,8 +660,11 @@ def exercise_complete(item_id):
 
 
 # --------------------------------------------------------------------------
-# AI Coach (rule-based chat)
+# AI Coach (Azure AI agent)
 # --------------------------------------------------------------------------
+
+COACH_HISTORY_LIMIT = 20
+
 
 @app.route("/coach")
 def coach_page():
@@ -557,10 +672,7 @@ def coach_page():
     rows = db.execute(
         "SELECT * FROM coach_messages WHERE user_id = ? ORDER BY id", (g.user_id,)
     ).fetchall()
-    messages = []
-    for r in rows:
-        extra = json.loads(r["extra"]) if r["extra"] else None
-        messages.append({"sender": r["sender"], "text": r["text"], "extra": extra})
+    messages = [{"sender": r["sender"], "text": r["text"]} for r in rows]
     return render_template("coach.html", messages=messages)
 
 
@@ -575,15 +687,28 @@ def coach_message():
     db.execute(
         "INSERT INTO coach_messages (user_id, sender, text) VALUES (?, 'user', ?)", (user_id, text)
     )
-    result = coach_engine.reply_to(text)
-    extra = {"routine": result["routine"], "minutes": result["routine_minutes"]}
+    db.commit()
+
+    history_rows = db.execute(
+        "SELECT sender, text FROM coach_messages WHERE user_id = ? ORDER BY id DESC LIMIT ?",
+        (user_id, COACH_HISTORY_LIMIT),
+    ).fetchall()
+    history = [
+        {"role": "assistant" if r["sender"] == "coach" else "user", "text": r["text"]}
+        for r in reversed(history_rows)
+    ]
+
+    try:
+        reply = azure_agent.coach_reply(history)
+    except Exception:
+        reply = "Sorry, I couldn't reach the coach right now — please try again in a moment."
+
     db.execute(
-        "INSERT INTO coach_messages (user_id, sender, text, extra) VALUES (?, 'coach', ?, ?)",
-        (user_id, result["reply"], json.dumps(extra)),
+        "INSERT INTO coach_messages (user_id, sender, text) VALUES (?, 'coach', ?)",
+        (user_id, reply),
     )
     db.commit()
-    return {"ok": True, "reply": result["reply"], "routine": result["routine"],
-            "routine_minutes": result["routine_minutes"]}
+    return {"ok": True, "reply": reply}
 
 
 # --------------------------------------------------------------------------
@@ -639,7 +764,7 @@ def caregiver():
     db = get_db()
     user_id = g.user_id
     checkin_today = get_today_checkin(db, user_id)
-    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    yesterday = (local_today() - timedelta(days=1)).isoformat()
     checkin_yesterday = db.execute(
         "SELECT * FROM checkins WHERE user_id = ? AND date = ? ORDER BY id DESC LIMIT 1",
         (user_id, yesterday),
@@ -657,7 +782,7 @@ def caregiver():
     yesterday_discomfort = len([a for a in (checkin_yesterday["discomfort_areas"] or "").split(",") if a]) if checkin_yesterday else 0
     discomfort_increased = today_discomfort > yesterday_discomfort
 
-    week_ago = (date.today() - timedelta(days=7)).isoformat()
+    week_ago = (local_today() - timedelta(days=7)).isoformat()
     sessions_this_week = db.execute(
         "SELECT COUNT(DISTINCT date) AS c FROM exercise_log WHERE user_id = ? AND date >= ?",
         (user_id, week_ago),
@@ -674,7 +799,7 @@ def caregiver():
     return render_template(
         "caregiver.html",
         user=g.profile,
-        today_display=date.today().strftime("%b %-d, %Y"),
+        today_display=local_today().strftime("%b %-d, %Y"),
         checkin_done=checkin_done,
         exercise_done=exercise_done,
         discomfort_increased=discomfort_increased,
@@ -768,6 +893,11 @@ def profile():
 
     profile_data = g.profile
     age = calculate_age(profile_data.get("date_of_birth"))
+    db = get_db()
+    achievements = db.execute(
+        "SELECT * FROM badges WHERE user_id = ? AND status = 'claimed' ORDER BY claimed_at DESC",
+        (g.user_id,),
+    ).fetchall()
     return render_template(
         "profile.html",
         user=profile_data,
@@ -775,6 +905,7 @@ def profile():
         activity_levels=ACTIVITY_LEVELS,
         age=age,
         bmi_label=bmi_category(profile_data.get("bmi")),
+        achievements=achievements,
     )
 
 
@@ -792,8 +923,8 @@ def settings_stub(key):
 def report():
     db = get_db()
     user_id = g.user_id
-    week_ago = (date.today() - timedelta(days=7)).isoformat()
-    two_weeks_ago = (date.today() - timedelta(days=14)).isoformat()
+    week_ago = (local_today() - timedelta(days=7)).isoformat()
+    two_weeks_ago = (local_today() - timedelta(days=14)).isoformat()
 
     this_week = db.execute(
         "SELECT * FROM daily_stats WHERE user_id = ? AND date >= ? ORDER BY date",
@@ -825,8 +956,8 @@ def report():
     if not highlights:
         highlights.append("Keep logging daily check-ins to unlock more insights")
 
-    start = (date.today() - timedelta(days=6)).strftime("%b %-d, %Y")
-    end = date.today().strftime("%b %-d, %Y")
+    start = (local_today() - timedelta(days=6)).strftime("%b %-d, %Y")
+    end = local_today().strftime("%b %-d, %Y")
 
     return render_template(
         "report.html",
@@ -859,7 +990,7 @@ def photolog_upload():
     if file and file.filename:
         ext = Path(file.filename).suffix.lower()
         if ext in (".png", ".jpg", ".jpeg", ".webp", ".gif"):
-            filename = secure_filename(f"{g.user_id}_{datetime.now():%Y%m%d_%H%M%S}{ext}")
+            filename = secure_filename(f"{g.user_id}_{local_now():%Y%m%d_%H%M%S}{ext}")
             file.save(UPLOAD_DIR / filename)
             db = get_db()
             db.execute(
@@ -871,11 +1002,30 @@ def photolog_upload():
 
 
 # --------------------------------------------------------------------------
-# Walking quest (GPS-based reward, weather-dependent)
+# Live walking map (badges spawn around the user, fixed in place; walk to
+# one and check in to claim it, Pokemon-Go style)
 # --------------------------------------------------------------------------
 
-@app.route("/quest/start", methods=["POST"])
-def quest_start():
+DAILY_BADGE_COUNT = 6
+
+
+@app.route("/map")
+def map_page():
+    db = get_db()
+    rows = db.execute(
+        "SELECT * FROM badges WHERE user_id = ? AND session_date = ? ORDER BY id",
+        (g.user_id, today_str()),
+    ).fetchall()
+    badges = [dict(r) for r in rows]
+    claimed_count = sum(1 for b in badges if b["status"] == "claimed")
+    return render_template(
+        "map.html", badges=badges, badges_json=json.dumps(badges),
+        claimed_count=claimed_count, total_count=len(badges),
+    )
+
+
+@app.route("/badges/spawn", methods=["POST"])
+def badges_spawn():
     db = get_db()
     user_id = g.user_id
     payload = request.get_json(silent=True) or {}
@@ -884,65 +1034,61 @@ def quest_start():
         return {"ok": False, "error": "location required"}, 400
 
     existing = db.execute(
-        "SELECT * FROM quests WHERE user_id = ? AND date = ?", (user_id, today_str())
-    ).fetchone()
+        "SELECT * FROM badges WHERE user_id = ? AND session_date = ? ORDER BY id",
+        (user_id, today_str()),
+    ).fetchall()
     if existing:
-        return {"ok": True, "quest": dict(existing)}
+        return {"ok": True, "badges": [dict(r) for r in existing]}
 
-    weather_now = get_weather(g.profile["city"])
-    quest = quest_engine.generate_quest(lat, lon, weather_now)
-    if not quest:
-        return {
-            "ok": True,
-            "quest": None,
-            "reason": f"{weather_now['label']} isn't great for a walking quest today — try again tomorrow.",
-        }
-
-    db.execute(
-        """INSERT INTO quests (user_id, date, origin_lat, origin_lon, target_lat, target_lon, radius_m,
-           reward_label, reward_points, status, weather_condition)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)""",
-        (user_id, today_str(), lat, lon, quest["target_lat"], quest["target_lon"], quest["radius_m"],
-         quest["reward_label"], quest["reward_points"], weather_now["label"]),
-    )
+    weather_now = get_weather_by_coords(lat, lon)
+    spawned = badge_engine.spawn_badges(lat, lon, weather=weather_now, count=DAILY_BADGE_COUNT)
+    for b in spawned:
+        db.execute(
+            """INSERT INTO badges (user_id, session_date, name, icon, description, rarity,
+               lat, lon, radius_m, points, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')""",
+            (user_id, today_str(), b["name"], b["icon"], b["description"], b["rarity"],
+             b["lat"], b["lon"], b["radius_m"], b["points"]),
+        )
     db.commit()
-    row = db.execute(
-        "SELECT * FROM quests WHERE user_id = ? AND date = ?", (user_id, today_str())
-    ).fetchone()
-    return {"ok": True, "quest": dict(row)}
+    rows = db.execute(
+        "SELECT * FROM badges WHERE user_id = ? AND session_date = ? ORDER BY id",
+        (user_id, today_str()),
+    ).fetchall()
+    return {"ok": True, "badges": [dict(r) for r in rows]}
 
 
-@app.route("/quest/check", methods=["POST"])
-def quest_check():
+@app.route("/badges/claim", methods=["POST"])
+def badges_claim():
     db = get_db()
     user_id = g.user_id
     payload = request.get_json(silent=True) or {}
-    lat, lon = payload.get("lat"), payload.get("lon")
-    quest = db.execute(
-        "SELECT * FROM quests WHERE user_id = ? AND date = ?", (user_id, today_str())
-    ).fetchone()
-    if not quest or lat is None or lon is None:
+    lat, lon, badge_id = payload.get("lat"), payload.get("lon"), payload.get("badge_id")
+    if lat is None or lon is None or badge_id is None:
         return {"ok": False}, 400
 
-    distance = quest_engine.haversine_m(lat, lon, quest["target_lat"], quest["target_lon"])
-    if quest["status"] == "claimed":
-        return {"ok": True, "claimed": True, "distance_m": round(distance),
-                "reward_label": quest["reward_label"], "reward_points": quest["reward_points"]}
+    badge = db.execute(
+        "SELECT * FROM badges WHERE id = ? AND user_id = ?", (badge_id, user_id)
+    ).fetchone()
+    if not badge:
+        return {"ok": False}, 404
 
-    if distance <= quest["radius_m"]:
+    distance = badge_engine.haversine_m(lat, lon, badge["lat"], badge["lon"])
+    if badge["status"] == "claimed":
+        return {"ok": True, "claimed": True, "distance_m": round(distance)}
+
+    if distance <= badge["radius_m"]:
         db.execute(
-            "UPDATE quests SET status = 'claimed' WHERE user_id = ? AND date = ?",
-            (user_id, today_str()),
-        )
-        db.execute(
-            "INSERT INTO rewards (user_id, label, points) VALUES (?, ?, ?)",
-            (user_id, quest["reward_label"], quest["reward_points"]),
+            "UPDATE badges SET status = 'claimed', claimed_at = ? WHERE id = ?",
+            (local_now().isoformat(), badge_id),
         )
         db.commit()
-        new_points = (g.profile.get("points") or 0) + quest["reward_points"]
+        new_points = (g.profile.get("points") or 0) + badge["points"]
         g.sb.table("profiles").update({"points": new_points}).eq("id", user_id).execute()
-        return {"ok": True, "claimed": True, "just_claimed": True, "distance_m": round(distance),
-                "reward_label": quest["reward_label"], "reward_points": quest["reward_points"]}
+        return {
+            "ok": True, "claimed": True, "just_claimed": True, "distance_m": round(distance),
+            "name": badge["name"], "icon": badge["icon"], "points": badge["points"],
+        }
 
     return {"ok": True, "claimed": False, "distance_m": round(distance)}
 

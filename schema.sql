@@ -106,37 +106,44 @@ CREATE TABLE IF NOT EXISTS activity_events (
 );
 CREATE INDEX IF NOT EXISTS idx_activity_events_user ON activity_events (user_id);
 
--- One AI-generated mission per user per day, cached so it stays stable on reload.
+-- One AI-generated mission per user per day, cached so it stays stable on
+-- reload. Fields mirror the structured JSON the Azure AI agent returns.
 CREATE TABLE IF NOT EXISTS missions (
     user_id TEXT NOT NULL,
     date TEXT NOT NULL,
     title TEXT NOT NULL,
-    narrative TEXT NOT NULL,
+    category TEXT,
+    goal TEXT,
+    instructions TEXT,
+    duration_minutes INTEGER,
+    difficulty TEXT,
+    equipment TEXT,
+    safety_note TEXT,
+    alternative_mission TEXT,
+    encouragement TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (user_id, date)
 );
 
--- One walking quest per user per day, anchored to wherever they started it.
-CREATE TABLE IF NOT EXISTS quests (
-    user_id TEXT NOT NULL,
-    date TEXT NOT NULL,
-    origin_lat REAL,
-    origin_lon REAL,
-    target_lat REAL,
-    target_lon REAL,
-    radius_m INTEGER,
-    reward_label TEXT,
-    reward_points INTEGER,
-    status TEXT DEFAULT 'active',
-    weather_condition TEXT,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (user_id, date)
-);
-
-CREATE TABLE IF NOT EXISTS rewards (
+-- Live walking map badges. A batch spawns around the user's position for
+-- the day, fixed in place (they do not follow the user, Pokemon-Go style).
+-- Claimed rows are never deleted - they double as the permanent
+-- achievements record.
+CREATE TABLE IF NOT EXISTS badges (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id TEXT NOT NULL,
-    label TEXT NOT NULL,
-    points INTEGER NOT NULL,
+    session_date TEXT NOT NULL,
+    name TEXT NOT NULL,
+    icon TEXT NOT NULL,
+    description TEXT,
+    rarity TEXT NOT NULL DEFAULT 'common',
+    lat REAL NOT NULL,
+    lon REAL NOT NULL,
+    radius_m INTEGER NOT NULL DEFAULT 30,
+    points INTEGER NOT NULL DEFAULT 10,
+    status TEXT NOT NULL DEFAULT 'active',
+    claimed_at TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+CREATE INDEX IF NOT EXISTS idx_badges_user_date ON badges (user_id, session_date);
+CREATE INDEX IF NOT EXISTS idx_badges_user_status ON badges (user_id, status);

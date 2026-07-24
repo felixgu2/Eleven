@@ -47,6 +47,26 @@
   {% endif %}
 </div>
 
+<div class="card">
+  <div class="card-title-row">
+    <h3 style="margin:0;">🏅 Achievements</h3>
+    <a href="{{ url_for('map_page') }}" class="link-btn" style="font-size:13px;">Open Map</a>
+  </div>
+  {% if achievements %}
+    <div class="achievement-grid">
+      {% for a in achievements %}
+      <div class="achievement-item" title="{{ a['description'] or '' }}">
+        <div class="achievement-icon {{ a['rarity'] }}">{{ a['icon'] }}</div>
+        <div class="achievement-name">{{ a['name'] }}</div>
+        <div class="achievement-points">+{{ a['points'] }} pts</div>
+      </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="empty-state">No badges claimed yet — open the Walking Map to find some nearby.</div>
+  {% endif %}
+</div>
+
 <form method="post" action="{{ url_for('profile') }}" id="edit-form" style="display:none; margin-bottom:20px;">
   <div class="form-group">
     <label>Name</label>
@@ -104,6 +124,9 @@
   </a>
   <a href="{{ url_for('caregiver') }}">
     <span>🧑‍⚕️ Caregiver View (demo)</span><span class="chevron">›</span>
+  </a>
+  <a href="{{ url_for('map_page') }}">
+    <span>🗺️ Walking Map</span><span class="chevron">›</span>
   </a>
 </div>
 

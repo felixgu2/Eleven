@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block title %}Walking Map{% endblock %}
+{% set hide_nav = true %}
+{% set force_header = true %}
+{% block head %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+  .app-content.no-nav { padding-bottom: 0 !important; display: flex; flex-direction: column; min-height: 0; }
+  .map-page-content { padding: 0 !important; flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  #map { flex: 1; width: 100%; z-index: 1; min-height: 300px; }
+  .map-topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 20px; background: var(--bg); z-index: 2;
+  }
+  .map-status-pill {
+    background: white; border-radius: 999px; padding: 6px 14px; font-size: 13px; font-weight: 700;
+    box-shadow: var(--shadow);
+  }
+  .badge-marker {
+    width: 42px; height: 42px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    font-size: 22px; background: white; border: 3px solid #9aa79f; box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+  }
+  .badge-marker.common { border-color: #6b8079; }
+  .badge-marker.uncommon { border-color: #4a90d9; }
+  .badge-marker.rare { border-color: #f5a623; box-shadow: 0 0 12px rgba(245,166,35,0.6); }
+  .badge-marker.claimed { opacity: 0.35; filter: grayscale(1); }
+  .user-dot { width: 18px; height: 18px; border-radius: 50%; background: #1f8a68; border: 3px solid white; box-shadow: 0 0 0 3px rgba(31,138,104,0.35); }
+  .leaflet-popup-content { font-size: 13px; text-align: center; }
+</style>
+{% endblock %}
+{% block topbar %}
+<div class="map-topbar">
+  <a href="{{ url_for('dashboard') }}" class="back">←</a>
+  <h1 style="font-size:17px; margin:0;">Walking Map</h1>
+  <span class="map-status-pill" id="status-pill">{{ claimed_count }} / {{ total_count or '?' }}</span>
+</div>
+{% endblock %}
+{% block content %}
+<div class="map-page-content">
+  <div id="map"></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+let badges = {{ badges_json|safe }};
+const statusPill = document.getElementById('status-pill');
+let map = null;
+let userMarker = null;
+const badgeMarkers = {};
+
+function updateStatusPill() {
+  const claimed = badges.filter(b => b.status === 'claimed').length;
+  statusPill.textContent = `${claimed} / ${badges.length}`;
+}
+
+function rarityIcon(badge) {
+  const cls = `badge-marker ${badge.rarity}${badge.status === 'claimed' ? ' claimed' : ''}`;
+  return L.divIcon({ html: `<div class="${cls}">${badge.icon}</div>`, className: '', iconSize: [42, 42] });
+}
+
+function plotBadge(badge) {
+  const marker = L.marker([badge.lat, badge.lon], { icon: rarityIcon(badge) }).addTo(map);
+  marker.bindPopup(
+    `<strong>${badge.icon} ${badge.name}</strong><br>${badge.description || ''}<br>` +
+    (badge.status === 'claimed' ? '<em>Claimed!</em>' : `+${badge.points} pts when you check in here`)
+  );
+  L.circle([badge.lat, badge.lon], { radius: badge.radius_m, color: '#1f8a68', weight: 1, fillOpacity: 0.08 }).addTo(map);
+  badgeMarkers[badge.id] = marker;
+}
+
+function haversineM(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const toRad = d => d * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1), dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+function initMap(lat, lon) {
+  map = L.map('map').setView([lat, lon], 17);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '&copy; OpenStreetMap contributors',
+  }).addTo(map);
+  userMarker = L.marker([lat, lon], { icon: L.divIcon({ html: '<div class="user-dot"></div>', className: '', iconSize: [18, 18] }) }).addTo(map);
+  badges.forEach(plotBadge);
+  updateStatusPill();
+}
+
+async function checkNearbyBadges(lat, lon) {
+  for (const badge of badges) {
+    if (badge.status === 'claimed') continue;
+    const dist = haversineM(lat, lon, badge.lat, badge.lon);
+    if (dist <= badge.radius_m) {
+      const res = await postJSON('/badges/claim', { lat, lon, badge_id: badge.id });
+      if (res.just_claimed) {
+        badge.status = 'claimed';
+        const marker = badgeMarkers[badge.id];
+        if (marker) {
+          marker.setIcon(rarityIcon(badge));
+          marker.setPopupContent(`<strong>${badge.icon} ${badge.name}</strong><br><em>Claimed!</em>`);
+        }
+        updateStatusPill();
+        showToast(`🎉 ${res.icon || badge.icon} ${res.name || badge.name} claimed! +${res.points} pts`);
+      }
+    }
+  }
+}
+
+function onPosition(pos) {
+  const { latitude, longitude } = pos.coords;
+  if (!map) {
+    initMap(latitude, longitude);
+  } else if (userMarker) {
+    userMarker.setLatLng([latitude, longitude]);
+  }
+  postJSON('/location/update', { lat: latitude, lon: longitude });
+  checkNearbyBadges(latitude, longitude);
+}
+
+function onPositionError() {
+  document.getElementById('map').innerHTML =
+    '<div class="empty-state" style="padding:60px 20px;">Location access is needed to show the walking map. Please allow location access and reload this page.</div>';
+}
+
+if (!navigator.geolocation) {
+  onPositionError();
+} else if (badges.length > 0) {
+  navigator.geolocation.getCurrentPosition(onPosition, onPositionError, { enableHighAccuracy: true });
+  navigator.geolocation.watchPosition(onPosition, () => {}, { enableHighAccuracy: true, maximumAge: 5000 });
+} else {
+  navigator.geolocation.getCurrentPosition(async (pos) => {
+    const { latitude, longitude } = pos.coords;
+    const res = await postJSON('/badges/spawn', { lat: latitude, lon: longitude });
+    badges = res.badges || [];
+    initMap(latitude, longitude);
+    navigator.geolocation.watchPosition(onPosition, () => {}, { enableHighAccuracy: true, maximumAge: 5000 });
+  }, onPositionError, { enableHighAccuracy: true });
+}
+</script>
+{% endblock %}

@@ -19,3 +19,20 @@ async function postJSON(url, data) {
   });
   return res.json();
 }
+
+// Report the browser's real timezone once per session so the server can
+// compute "today" / "this hour" correctly instead of using its own clock.
+(function reportTimezone() {
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (tz && sessionStorage.getItem('reported_tz') !== tz) {
+      fetch('/timezone', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tz }),
+      }).then(res => {
+        if (res.ok) sessionStorage.setItem('reported_tz', tz);
+      });
+    }
+  } catch (e) { /* Intl unsupported - server falls back to UTC */ }
+})();
