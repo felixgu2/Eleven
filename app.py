@@ -171,15 +171,31 @@ def collect_user_stats(db, user_id, profile, weather_now):
     week_ago = (local_today() - timedelta(days=MISSION_HISTORY_DAYS)).isoformat()
 
     steps_today, distance_today_m = today_activity(db, user_id)
-    yesterday_distance_m = (db.execute(
-        "SELECT distance_m FROM daily_activity WHERE user_id = ? AND session_date = ?",
-        (user_id, yesterday),
-    ).fetchone() or {"distance_m": 0})["distance_m"]
 
-    active_days_last_week = db.execute(
-        "SELECT COUNT(*) AS c FROM daily_activity WHERE user_id = ? AND session_date >= ? AND distance_m >= ?",
-        (user_id, week_ago, ACTIVE_DAY_DISTANCE_M),
-    ).fetchone()["c"]
+    # Full day-by-day walking history for the last week, not just a single
+    # aggregate count - this is what actually gives the mission generator
+    # and Coach "memory" of the whole week rather than only yesterday.
+    weekly_rows = db.execute(
+        "SELECT session_date, distance_m FROM daily_activity "
+        "WHERE user_id = ? AND session_date >= ? AND session_date < ? ORDER BY session_date",
+        (user_id, week_ago, today_str()),
+    ).fetchall()
+    weekly_days = [
+        {
+            "date": r["session_date"],
+            "weekday": datetime.fromisoformat(r["session_date"]).strftime("%a"),
+            "distance_m": r["distance_m"],
+            "steps": round(r["distance_m"] / STEP_LENGTH_M),
+        }
+        for r in weekly_rows
+    ]
+    weekly_total_distance_m = sum(d["distance_m"] for d in weekly_days)
+    weekly_total_steps = sum(d["steps"] for d in weekly_days)
+    weekly_avg_steps = round(weekly_total_steps / MISSION_HISTORY_DAYS)
+    active_days_last_week = sum(1 for d in weekly_days if d["distance_m"] >= ACTIVE_DAY_DISTANCE_M)
+
+    yesterday_entry = next((d for d in weekly_days if d["date"] == yesterday), None)
+    yesterday_distance_m = yesterday_entry["distance_m"] if yesterday_entry else 0
 
     badges_today = db.execute(
         "SELECT COUNT(*) AS c FROM badges WHERE user_id = ? AND session_date = ? AND status = 'claimed'",
@@ -207,6 +223,10 @@ def collect_user_stats(db, user_id, profile, weather_now):
         "distance_today_m": distance_today_m,
         "yesterday_steps": round(yesterday_distance_m / STEP_LENGTH_M),
         "yesterday_distance_m": yesterday_distance_m,
+        "weekly_days": weekly_days,
+        "weekly_total_steps": weekly_total_steps,
+        "weekly_total_distance_m": weekly_total_distance_m,
+        "weekly_avg_steps": weekly_avg_steps,
         "active_days_last_week": active_days_last_week,
         "badges_today": badges_today,
         "badges_yesterday": badges_yesterday,
@@ -214,6 +234,22 @@ def collect_user_stats(db, user_id, profile, weather_now):
         "missions_completed": sum(1 for r in mission_history if r["completed"]),
         "today_mission": today_mission,
     }
+
+
+def weekly_breakdown_text(stats):
+    """Day-by-day walking history for the last week - this is what gives
+    the mission generator and Coach actual memory of the whole week,
+    rather than just yesterday plus a single active-days tally."""
+    if not stats["weekly_days"]:
+        return [f"No walking activity recorded in the last {MISSION_HISTORY_DAYS} days."]
+    lines = [
+        f"Last {MISSION_HISTORY_DAYS} days: {stats['weekly_total_steps']} steps total "
+        f"(~{stats['weekly_total_distance_m'] / 1000:.1f} km), averaging {stats['weekly_avg_steps']} "
+        f"steps/day, active on {stats['active_days_last_week']} of {MISSION_HISTORY_DAYS} days."
+    ]
+    breakdown = ", ".join(f"{d['weekday']} {d['date']}: {d['steps']} steps" for d in stats["weekly_days"])
+    lines.append(f"Daily breakdown: {breakdown}.")
+    return lines
 
 
 def mission_context_text(stats):
@@ -239,7 +275,7 @@ def mission_context_text(stats):
         lines.append("Yesterday: no recorded walking activity.")
     if stats["badges_yesterday"]:
         lines.append(f"Claimed {stats['badges_yesterday']} walking badge(s) yesterday.")
-    lines.append(f"Active (walked a meaningful distance) on {stats['active_days_last_week']} of the last {MISSION_HISTORY_DAYS} days.")
+    lines.extend(weekly_breakdown_text(stats))
     if stats["mission_history"]:
         lines.append(
             f"Completed {stats['missions_completed']} of {len(stats['mission_history'])} "
@@ -544,6 +580,7 @@ def coach_stats_context(stats):
         f"Today so far: {stats['steps_today']} steps (~{stats['distance_today_m'] / 1000:.1f} km walked), "
         f"{stats['badges_today']} walking badge(s) claimed, {profile.get('points') or 0} total points.",
     ]
+    lines.extend(weekly_breakdown_text(stats))
     if stats["today_mission"]:
         status = "completed" if stats["today_mission"]["completed"] else "not marked complete yet"
         lines.append(f"Today's mission: \"{stats['today_mission']['title']}\" - {status}.")
