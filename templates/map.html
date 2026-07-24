@@ -64,13 +64,17 @@
 <script>
 let badges = {{ badges_json|safe }};
 const statusPill = document.getElementById('status-pill');
+const DAILY_CLAIM_LIMIT = {{ total_count }};
 let map = null;
 let userMarker = null;
 const badgeMarkers = {};
 
 function updateStatusPill() {
+  // Denominator is the fixed daily claim cap, not how many have spawned
+  // so far - spawning itself has no ceiling, so "X / spawned-count" would
+  // just keep climbing forever instead of showing the actual daily goal.
   const claimed = badges.filter(b => b.status === 'claimed').length;
-  statusPill.textContent = `${claimed} / ${badges.length}`;
+  statusPill.textContent = `${claimed} / ${DAILY_CLAIM_LIMIT}`;
 }
 
 function rarityIcon(badge) {
@@ -200,6 +204,8 @@ if (window.visualViewport) {
   window.visualViewport.addEventListener('resize', () => { if (map) map.invalidateSize(); });
 }
 
+let limitReachedToastShown = false;
+
 async function checkNearbyBadges(lat, lon) {
   for (const badge of badges) {
     if (badge.status === 'claimed') continue;
@@ -215,6 +221,9 @@ async function checkNearbyBadges(lat, lon) {
         }
         updateStatusPill();
         showToast(`🎉 ${res.icon || badge.icon} ${res.name || badge.name} claimed! +${res.points} pts`);
+      } else if (res.limit_reached && !limitReachedToastShown) {
+        limitReachedToastShown = true;
+        showToast(`🎯 Daily limit reached (${DAILY_CLAIM_LIMIT}/day) — come back tomorrow for more!`);
       }
     }
   }
@@ -257,6 +266,10 @@ function onPosition(pos) {
     initMap(latitude, longitude);
   } else if (userMarker) {
     userMarker.setLatLng([latitude, longitude]);
+    // The map view was otherwise only ever centered once, at the very
+    // first fix - walking somewhere new would move your marker (and any
+    // newly-spawned badges near you) off-screen instead of following you.
+    map.panTo([latitude, longitude]);
   }
 
   // Highest priority: bearing between the last fix and this one. Only

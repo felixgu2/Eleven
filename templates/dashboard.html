@@ -17,8 +17,8 @@
 
 <div class="mission-card full-width">
   <div class="kicker">🗺️ Walking Map</div>
-  <h3>{% if badges_total %}{{ badges_claimed }} of {{ badges_total }} badges claimed today{% else %}Badges are waiting nearby{% endif %}</h3>
-  <p>{% if badges_total %}Keep exploring — more badges are still out there today.{% else %}Open the map to spawn today's badges around you and start walking.{% endif %}</p>
+  <h3>{{ badges_claimed }} of {{ badges_total }} badges claimed today</h3>
+  <p>New badges keep appearing nearby as you walk — open the map to find some.</p>
   <a href="{{ url_for('map_page') }}" class="btn btn-secondary">Open Map</a>
 </div>
 

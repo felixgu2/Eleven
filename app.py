@@ -31,7 +31,7 @@ ACTIVITY_LEVELS = [
     ("very_active", "Very active (physical job or 2x/day training)"),
 ]
 
-DAILY_BADGE_COUNT = 6       # hard cap on badges spawned (and therefore claimable) per user per day
+DAILY_CLAIM_LIMIT = 6       # hard cap on badges CLAIMED per user per day - spawning itself is uncapped
 BADGE_TOPUP_BATCH = 1       # add one at a time so new badges feel like a gradual discovery
 BADGE_INITIAL_BATCH = 2     # first spawn of the day gives a couple of choices right away
 
@@ -515,9 +515,6 @@ def dashboard():
     mission = dict(get_or_create_mission(g.sb, user_id, stats))
     mission["instructions"] = mission.get("instructions") or []
 
-    badges_today_total = len(g.sb.table("badges").select("id") \
-        .eq("user_id", user_id).eq("session_date", today_str()).execute().data)
-
     return render_template(
         "dashboard.html",
         user=g.profile,
@@ -525,7 +522,7 @@ def dashboard():
         weather=weather_now,
         mission=mission,
         badges_claimed=stats["badges_today"],
-        badges_total=badges_today_total,
+        badges_total=DAILY_CLAIM_LIMIT,
         steps=stats["steps_today"],
     )
 
@@ -693,7 +690,7 @@ def map_page():
     claimed_count = sum(1 for b in badges if b["status"] == "claimed")
     return render_template(
         "map.html", badges=badges, badges_json=json.dumps(badges),
-        claimed_count=claimed_count, total_count=len(badges),
+        claimed_count=claimed_count, total_count=DAILY_CLAIM_LIMIT,
     )
 
 
@@ -701,12 +698,13 @@ def map_page():
 def badges_spawn():
     """Called on page load and again periodically as the user walks (the
     frontend throttles this to roughly once per BADGE_TOPUP_DISTANCE_M
-    walked), so new badges keep appearing nearby to choose from instead
-    of a single fixed batch dropped at the start. Every user gets at
-    most DAILY_BADGE_COUNT badges total per day (spawned across any
-    number of calls) - since claiming requires a spawned badge, this
-    also caps the number of claims/points a user can earn from the map
-    each day."""
+    walked), so new badges keep appearing nearby wherever they are -
+    spawning itself has no daily ceiling. Only claiming is capped, at
+    DAILY_CLAIM_LIMIT per day (enforced in /badges/claim), so once
+    that's reached there's simply nothing left to gain from claiming
+    more that day - this stops topping up once it's reached, since
+    generating unclaimable badges would just waste an AI call for
+    nothing the user can actually collect."""
     sb = g.sb
     user_id = g.user_id
     payload = request.get_json(silent=True) or {}
@@ -717,11 +715,10 @@ def badges_spawn():
     existing = sb.table("badges").select("*") \
         .eq("user_id", user_id).eq("session_date", today_str()).order("id").execute().data
     total_today = len(existing)
+    claimed_today = sum(1 for b in existing if b["status"] == "claimed")
 
-    remaining_slots = DAILY_BADGE_COUNT - total_today
-    if remaining_slots > 0:
+    if claimed_today < DAILY_CLAIM_LIMIT:
         batch = BADGE_INITIAL_BATCH if total_today == 0 else BADGE_TOPUP_BATCH
-        batch = min(batch, remaining_slots)
         weather_now = get_weather_by_coords(lat, lon)
         spawned = badge_engine.spawn_badges(lat, lon, weather=weather_now, count=batch)
         sb.table("badges").insert([
@@ -757,6 +754,11 @@ def badges_claim():
         return {"ok": True, "claimed": True, "distance_m": round(distance)}
 
     if distance <= badge["radius_m"]:
+        claimed_today = len(sb.table("badges").select("id")
+            .eq("user_id", user_id).eq("session_date", today_str()).eq("status", "claimed").execute().data)
+        if claimed_today >= DAILY_CLAIM_LIMIT:
+            return {"ok": True, "claimed": False, "distance_m": round(distance), "limit_reached": True}
+
         sb.table("badges").update({
             "status": "claimed", "claimed_at": local_now().isoformat(),
         }).eq("id", badge_id).execute()
