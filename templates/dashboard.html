@@ -1,22 +1,23 @@
 {% extends "base.html" %}
+{% import "_icons.html" as icons %}
 {% block title %}WalkyMiles - Home{% endblock %}
 {% set wide = true %}
 {% block content %}
 
 <div class="full-width" style="display:flex; justify-content:space-between; align-items:center; margin:6px 0 2px;">
-  <h2 style="margin:0;">{{ greeting }}, {{ user['name'] }} 👋</h2>
-  <span class="points-chip">⭐ {{ user['points'] }}</span>
+  <h2 style="margin:0;">{{ greeting }}, {{ user['name'] }} {{ icons.icon('wave', cls='icon-lg') }}</h2>
+  <span class="points-chip">{{ icons.icon('star', cls='icon-pop') }} {{ user['points'] }}</span>
 </div>
 <p class="full-width" style="color:var(--text-muted); margin-top:0; font-size:14px;">Get outside, earn badges, and keep moving.</p>
 <div class="full-width" style="display:flex; gap:8px; flex-wrap:wrap;">
   {% if weather %}
-  <div class="weather-chip" id="weather-chip" data-source="{{ weather.source }}">{{ weather.emoji }} {{ weather.temp_f }}°F · {{ weather.label }} · {{ user['city'] }}</div>
+  <div class="weather-chip" id="weather-chip" data-source="{{ weather.source }}"><span id="weather-chip-icon">{{ icons.icon(weather.icon) }}</span> <span id="weather-chip-text">{{ weather.temp_f }}°F · {{ weather.label }} · {{ user['city'] }}</span></div>
   {% endif %}
-  <div class="weather-chip" id="steps-chip">🚶 {{ steps }} steps today</div>
+  <div class="weather-chip" id="steps-chip">{{ icons.icon('footprints') }} {{ steps }} steps today</div>
 </div>
 
 <div class="mission-card full-width">
-  <div class="kicker">🗺️ Walking Map</div>
+  <div class="kicker">{{ icons.icon('map') }} Walking Map</div>
   <h3>{{ badges_claimed }} of {{ badges_total }} badges claimed today</h3>
   <p>New badges keep appearing nearby as you walk — open the map to find some.</p>
   <a href="{{ url_for('map_page') }}" class="btn btn-secondary">Open Map</a>
@@ -25,7 +26,7 @@
 {% if mission %}
 <div class="card full-width">
   <div class="card-title-row">
-    <h3>🤖 Today's AI Mission{% if mission['duration_minutes'] %} · {{ mission['duration_minutes'] }} min{% endif %}</h3>
+    <h3>{{ icons.icon('bot') }} Today's AI Mission{% if mission['duration_minutes'] %} · {{ mission['duration_minutes'] }} min{% endif %}</h3>
   </div>
   <div style="font-weight:700; font-size:15px; margin-bottom:6px;">{{ mission['title'] }}</div>
   {% if mission['goal'] %}<p style="font-size:13px; color:var(--text-muted); margin:0 0 12px;">{{ mission['goal'] }}</p>{% endif %}
@@ -34,10 +35,10 @@
     {% for step in mission['instructions'] %}<li>{{ step }}</li>{% endfor %}
   </ol>
   {% endif %}
-  {% if mission['safety_note'] %}<p class="mission-safety-light">⚠️ {{ mission['safety_note'] }}</p>{% endif %}
+  {% if mission['safety_note'] %}<p class="mission-safety-light">{{ icons.icon('alert-triangle') }} {{ mission['safety_note'] }}</p>{% endif %}
   {% if mission['encouragement'] %}<p style="font-style:italic; color:var(--text-muted); font-size:13px;">{{ mission['encouragement'] }}</p>{% endif %}
   {% if mission['completed'] %}
-  <div class="mission-complete-chip" id="mission-complete-chip">✅ Completed</div>
+  <div class="mission-complete-chip" id="mission-complete-chip">{{ icons.icon('check-circle') }} Completed</div>
   {% else %}
   <button class="btn btn-primary btn-sm" id="mission-complete-btn">Mark as Complete</button>
   {% endif %}
@@ -55,9 +56,11 @@ if (navigator.geolocation) {
     const { latitude, longitude } = pos.coords;
     sendLocation(latitude, longitude);
     fetch(`/api/weather?lat=${latitude}&lon=${longitude}`).then(res => res.json()).then(w => {
-      const chip = document.getElementById('weather-chip');
-      if (chip && w.emoji) {
-        chip.textContent = `${w.emoji} ${w.temp_f}°F · ${w.label} · ${w.place_name || 'your area'}`;
+      const iconEl = document.getElementById('weather-chip-icon');
+      const textEl = document.getElementById('weather-chip-text');
+      if (iconEl && textEl && w.icon) {
+        iconEl.innerHTML = weatherIconSvg(w.icon); // our own fixed icon set, not user data
+        textEl.textContent = `${w.temp_f}°F · ${w.label} · ${w.place_name || 'your area'}`;
       }
     });
   }, () => { /* no permission yet - keep the city-based weather shown */ }, { maximumAge: 300000 });
@@ -71,7 +74,7 @@ if (missionCompleteBtn) {
     if (res.ok) {
       const chip = document.createElement('div');
       chip.className = 'mission-complete-chip';
-      chip.textContent = '✅ Completed';
+      chip.innerHTML = ICONS['check-circle'] + ' Completed';
       missionCompleteBtn.replaceWith(chip);
     } else {
       missionCompleteBtn.disabled = false;

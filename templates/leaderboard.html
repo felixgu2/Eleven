@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_icons.html" as icons %}
 {% block title %}Leaderboard{% endblock %}
 {% block topbar %}
 <div class="topbar">
@@ -22,10 +23,10 @@
     {% for e in entries %}
     <div class="leaderboard-row {% if e['id'] == g.user_id %}me{% endif %}">
       <span class="leaderboard-rank {% if e['rank'] <= 3 %}top{{ e['rank'] }}{% endif %}">
-        {% if e['rank'] == 1 %}🥇{% elif e['rank'] == 2 %}🥈{% elif e['rank'] == 3 %}🥉{% else %}#{{ e['rank'] }}{% endif %}
+        {% if e['rank'] <= 3 %}{{ icons.icon('medal', cls='icon-spin-in') }}{% else %}#{{ e['rank'] }}{% endif %}
       </span>
       <span class="leaderboard-name">{{ e['name'] }}{% if e['id'] == g.user_id %} (You){% endif %}</span>
-      <span class="leaderboard-points">⭐ {{ e['points'] }}</span>
+      <span class="leaderboard-points">{{ icons.icon('star') }} {{ e['points'] }}</span>
     </div>
     {% endfor %}
   </div>

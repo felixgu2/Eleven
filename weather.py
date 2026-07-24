@@ -16,16 +16,17 @@ _PLACE_CACHE_SECONDS = 21600  # place names don't change - cache longer
 _place_cache = {}
 
 _CODE_MAP = {
-    0: ("Clear", "☀️"),
-    1: ("Mostly Clear", "🌤️"),
-    2: ("Partly Cloudy", "⛅"),
-    3: ("Overcast", "☁️"),
-    45: ("Foggy", "🌫️"), 48: ("Foggy", "🌫️"),
-    51: ("Drizzle", "🌦️"), 53: ("Drizzle", "🌦️"), 55: ("Drizzle", "🌦️"),
-    61: ("Rain", "🌧️"), 63: ("Rain", "🌧️"), 65: ("Heavy Rain", "🌧️"),
-    71: ("Snow", "❄️"), 73: ("Snow", "❄️"), 75: ("Heavy Snow", "❄️"),
-    80: ("Rain Showers", "🌦️"), 81: ("Rain Showers", "🌦️"), 82: ("Rain Showers", "🌦️"),
-    95: ("Thunderstorm", "⛈️"), 96: ("Thunderstorm", "⛈️"), 99: ("Thunderstorm", "⛈️"),
+    # (label, icon name) - icon names match the SVG set in templates/_icons.html
+    0: ("Clear", "sun"),
+    1: ("Mostly Clear", "cloud-sun"),
+    2: ("Partly Cloudy", "cloud-sun"),
+    3: ("Overcast", "cloud"),
+    45: ("Foggy", "fog"), 48: ("Foggy", "fog"),
+    51: ("Drizzle", "cloud-drizzle"), 53: ("Drizzle", "cloud-drizzle"), 55: ("Drizzle", "cloud-drizzle"),
+    61: ("Rain", "cloud-rain"), 63: ("Rain", "cloud-rain"), 65: ("Heavy Rain", "cloud-rain"),
+    71: ("Snow", "snowflake"), 73: ("Snow", "snowflake"), 75: ("Heavy Snow", "snowflake"),
+    80: ("Rain Showers", "cloud-rain"), 81: ("Rain Showers", "cloud-rain"), 82: ("Rain Showers", "cloud-rain"),
+    95: ("Thunderstorm", "cloud-lightning"), 96: ("Thunderstorm", "cloud-lightning"), 99: ("Thunderstorm", "cloud-lightning"),
 }
 _BAD_OUTDOOR_CODES = {45, 48, 51, 53, 55, 61, 63, 65, 71, 73, 75, 80, 81, 82, 95, 96, 99}
 
@@ -55,13 +56,13 @@ def _fetch_live_by_coords(lat, lon):
         data = json.load(resp)
     current = data["current"]
     code = current["weather_code"]
-    label, emoji = _CODE_MAP.get(code, ("Clear", "☀️"))
+    label, icon = _CODE_MAP.get(code, ("Clear", "sun"))
     temp = current["temperature_2m"]
     return {
         "temp_f": round(temp),
         "code": code,
         "label": label,
-        "emoji": emoji,
+        "icon": icon,
         "good_for_outdoors": code not in _BAD_OUTDOOR_CODES and 40 <= temp <= 95,
         "source": "live",
     }
@@ -74,12 +75,12 @@ def _fallback(seed_key):
     code_options = [0, 1, 2, 3, 61, 71, 95]
     code = code_options[h % len(code_options)]
     temp = 45 + (h % 40)
-    label, emoji = _CODE_MAP.get(code, ("Clear", "☀️"))
+    label, icon = _CODE_MAP.get(code, ("Clear", "sun"))
     return {
         "temp_f": temp,
         "code": code,
         "label": label,
-        "emoji": emoji,
+        "icon": icon,
         "good_for_outdoors": code not in _BAD_OUTDOOR_CODES and 40 <= temp <= 95,
         "source": "offline-estimate",
     }

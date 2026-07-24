@@ -1,3 +1,4 @@
+{% import "_icons.html" as icons %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -34,19 +35,19 @@
   {% if not hide_nav %}
   <nav class="bottom-nav">
     <a href="{{ url_for('dashboard') }}" class="nav-item {% if request.endpoint == 'dashboard' %}active{% endif %}">
-      <span class="nav-icon">🏠</span><span>Home</span>
+      <span class="nav-icon">{{ icons.icon('home') }}</span><span>Home</span>
     </a>
     <a href="{{ url_for('map_page') }}" class="nav-item {% if request.endpoint == 'map_page' %}active{% endif %}">
-      <span class="nav-icon">🗺️</span><span>Map</span>
+      <span class="nav-icon">{{ icons.icon('map') }}</span><span>Map</span>
     </a>
     <a href="{{ url_for('coach_page') }}" class="nav-item {% if request.endpoint == 'coach_page' %}active{% endif %}">
-      <span class="nav-icon">💬</span><span>Coach</span>
+      <span class="nav-icon">{{ icons.icon('message-circle') }}</span><span>Coach</span>
     </a>
     <a href="{{ url_for('leaderboard') }}" class="nav-item {% if request.endpoint == 'leaderboard' %}active{% endif %}">
-      <span class="nav-icon">🏆</span><span>Ranks</span>
+      <span class="nav-icon">{{ icons.icon('trophy') }}</span><span>Ranks</span>
     </a>
     <a href="{{ url_for('profile') }}" class="nav-item {% if request.endpoint == 'profile' %}active{% endif %}">
-      <span class="nav-icon">👤</span><span>Profile</span>
+      <span class="nav-icon">{{ icons.icon('user') }}</span><span>Profile</span>
     </a>
   </nav>
   {% endif %}

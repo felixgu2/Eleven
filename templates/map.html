@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_icons.html" as icons %}
 {% block title %}Walking Map{% endblock %}
 {% set hide_nav = true %}
 {% set force_header = true %}
@@ -45,10 +46,10 @@
 {% endblock %}
 {% block topbar %}
 <div class="map-topbar">
-  <a href="{{ url_for('dashboard') }}" class="back">←</a>
+  <a href="{{ url_for('dashboard') }}" class="back">{{ icons.icon('arrow-left') }}</a>
   <h1 style="font-size:17px; margin:0;">Walking Map</h1>
   <div style="display:flex; align-items:center; gap:8px;">
-    <button class="compass-btn" id="compass-btn" style="display:none;">🧭 Enable Compass</button>
+    <button class="compass-btn" id="compass-btn" style="display:none;">{{ icons.icon('compass') }} Enable Compass</button>
     <span class="map-status-pill" id="status-pill">{{ claimed_count }} / {{ total_count or '?' }}</span>
   </div>
 </div>
@@ -220,10 +221,10 @@ async function checkNearbyBadges(lat, lon) {
           marker.setPopupContent(`<strong>${badge.icon} ${badge.name}</strong><br><em>Claimed!</em>`);
         }
         updateStatusPill();
-        showToast(`🎉 ${res.icon || badge.icon} ${res.name || badge.name} claimed! +${res.points} pts`);
+        showToast(`${res.icon || badge.icon} ${res.name || badge.name} claimed! +${res.points} pts`, 'sparkles');
       } else if (res.limit_reached && !limitReachedToastShown) {
         limitReachedToastShown = true;
-        showToast(`🎯 Daily limit reached (${DAILY_CLAIM_LIMIT}/day) — come back tomorrow for more!`);
+        showToast(`Daily limit reached (${DAILY_CLAIM_LIMIT}/day) — come back tomorrow for more!`, 'target');
       }
     }
   }

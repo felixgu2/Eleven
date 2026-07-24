@@ -1,10 +1,11 @@
 {% extends "base.html" %}
+{% import "_icons.html" as icons %}
 {% block title %}AI Coach{% endblock %}
 {% block topbar %}
 <div class="topbar">
-  <a href="{{ url_for('dashboard') }}" class="back">←</a>
+  <a href="{{ url_for('dashboard') }}" class="back">{{ icons.icon('arrow-left') }}</a>
   <h1>AI Coach</h1>
-  <span class="points-chip">🚶 {{ steps }}</span>
+  <span class="points-chip">{{ icons.icon('footprints') }} {{ steps }}</span>
 </div>
 {% endblock %}
 {% block content %}
@@ -14,7 +15,7 @@
   {% endfor %}
 </div>
 <div class="chat-input-row">
-  <button class="mic-btn" id="mic-btn" title="Hold to speak">🎤</button>
+  <button class="mic-btn" id="mic-btn" title="Hold to speak">{{ icons.icon('mic') }}</button>
   <input type="text" id="chat-text" placeholder="Type a message...">
   <button class="btn btn-primary btn-sm" id="send-btn">Send</button>
 </div>

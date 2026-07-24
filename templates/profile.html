@@ -1,9 +1,10 @@
 {% extends "base.html" %}
+{% import "_icons.html" as icons %}
 {% block title %}Profile{% endblock %}
 {% block topbar %}
 <div class="topbar">
   <h1>Profile</h1>
-  <span style="font-size:18px;">⚙️</span>
+  <span style="font-size:18px;">{{ icons.icon('settings') }}</span>
 </div>
 {% endblock %}
 {% block content %}
@@ -12,14 +13,14 @@
   <div>
     <div style="font-weight:700; font-size:16px;">{{ user['name'] }}</div>
     <div style="font-size:13px; color:var(--text-muted);">{{ user['email'] or 'No email set' }}</div>
-    <div style="margin-top:6px;"><span class="points-chip">⭐ {{ user['points'] }} pts</span></div>
+    <div style="margin-top:6px;"><span class="points-chip">{{ icons.icon('star') }} {{ user['points'] }} pts</span></div>
     <button class="link-btn" id="edit-toggle" style="margin-top:6px;">Edit Profile</button>
   </div>
 </div>
 
 {% if weekly_summary %}
 <div class="card">
-  <h3>🗓️ This Week</h3>
+  <h3>{{ icons.icon('calendar') }} This Week</h3>
   <p style="font-size:14px; line-height:1.5; color:var(--text); margin:0;">{{ weekly_summary }}</p>
 </div>
 {% endif %}
@@ -56,7 +57,7 @@
 
 <div class="card">
   <div class="card-title-row">
-    <h3 style="margin:0;">🏅 Achievements</h3>
+    <h3 style="margin:0;">{{ icons.icon('medal') }} Achievements</h3>
     <a href="{{ url_for('map_page') }}" class="link-btn" style="font-size:13px;">Open Map</a>
   </div>
   {% if achievements %}
@@ -123,10 +124,10 @@
 
 <div class="settings-list" style="margin-bottom:20px;">
   <a href="{{ url_for('map_page') }}">
-    <span>🗺️ Walking Map</span><span class="chevron">›</span>
+    <span>{{ icons.icon('map') }} Walking Map</span><span class="chevron">›</span>
   </a>
   <a href="{{ url_for('coach_page') }}">
-    <span>💬 AI Coach</span><span class="chevron">›</span>
+    <span>{{ icons.icon('message-circle') }} AI Coach</span><span class="chevron">›</span>
   </a>
 </div>
 
