@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from flask import (Flask, g, redirect, render_template, request, session,
                     url_for)
+from flask_socketio import SocketIO
 from supabase_auth.errors import AuthApiError
 
 import azure_agent
@@ -19,6 +20,7 @@ load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "careforward-dev-secret")
+socketio = SocketIO(app)
 
 PUBLIC_ENDPOINTS = {"index", "signup", "login", "static", "set_timezone"}
 
@@ -33,6 +35,12 @@ ACTIVITY_LEVELS = [
 DAILY_BADGE_COUNT = 6       # hard cap on badges spawned (and therefore claimable) per user per day
 BADGE_TOPUP_BATCH = 1       # add one at a time so new badges feel like a gradual discovery
 BADGE_INITIAL_BATCH = 2     # first spawn of the day gives a couple of choices right away
+
+# Live GPS position per user, kept in memory and updated over the
+# location_update WebSocket event (see near the bottom of this file).
+# Single-process assumption, same as the SQLite file used elsewhere.
+_live_locations = {}    # user_id -> (lat, lon)
+_socket_sid_users = {}  # socketio request.sid -> user_id, so a disconnect can be traced back
 
 
 # --------------------------------------------------------------------------
@@ -125,11 +133,13 @@ def greeting():
 
 
 def user_location():
-    """(lat, lon) if the browser has shared geolocation this session, else None."""
-    lat, lon = session.get("lat"), session.get("lon")
-    if lat is not None and lon is not None:
-        return lat, lon
-    return None
+    """(lat, lon) if the browser has shared geolocation this session, else
+    None. Fed by the location_update WebSocket event rather than an HTTP
+    route - kept in a plain in-memory dict rather than the Flask session,
+    since session writes made from inside a WS event handler aren't
+    reliably persisted back to the browser once the connection upgrades
+    past the initial HTTP handshake (no response to attach a cookie to)."""
+    return _live_locations.get(g.user_id)
 
 
 def current_weather():
@@ -305,24 +315,51 @@ def set_timezone():
     return {"ok": True}
 
 
-@app.route("/location/update", methods=["POST"])
-def location_update():
-    payload = request.get_json(silent=True) or {}
-    lat, lon = payload.get("lat"), payload.get("lon")
+@socketio.on("connect")
+def handle_socket_connect():
+    # Socket.IO events skip Flask's normal before_request dispatch, so the
+    # identity load has to be triggered explicitly here. The handshake is
+    # still a real HTTP request at this point, so the session cookie
+    # (and therefore g.user_id) is readable as usual.
+    load_identity()
+    if g.user_id:
+        _socket_sid_users[request.sid] = g.user_id
+
+
+@socketio.on("disconnect")
+def handle_socket_disconnect():
+    _socket_sid_users.pop(request.sid, None)
+
+
+@socketio.on("location_update")
+def handle_location_update(data):
+    """Same job as a POST /location/update would have done, but pushed
+    over the page's persistent WebSocket connection instead of opening a
+    fresh HTTP request every few seconds while the user walks."""
+    user_id = _socket_sid_users.get(request.sid)
+    if not user_id:
+        return
+    data = data or {}
+    lat, lon = data.get("lat"), data.get("lon")
     if lat is not None and lon is not None:
-        session["lat"] = lat
-        session["lon"] = lon
-    return {"ok": True}
+        _live_locations[user_id] = (lat, lon)
 
 
 @app.route("/api/weather")
 def api_weather():
-    weather_now = dict(current_weather())
-    loc = user_location()
-    if loc:
-        weather_now["place_name"] = get_place_name(*loc)
+    # Prefer lat/lon passed directly in the query string (the browser's
+    # freshest GPS fix) over the live-tracked location, since that's
+    # pushed over a fire-and-forget WebSocket event and may not have
+    # landed on the server yet by the time this request goes out.
+    lat = request.args.get("lat", type=float)
+    lon = request.args.get("lon", type=float)
+    if lat is not None and lon is not None:
+        loc = (lat, lon)
+        weather_now = dict(get_weather_by_coords(lat, lon))
     else:
-        weather_now["place_name"] = g.profile["city"]
+        loc = user_location()
+        weather_now = dict(current_weather())
+    weather_now["place_name"] = get_place_name(*loc) if loc else g.profile["city"]
     return weather_now
 
 
@@ -447,6 +484,14 @@ def profile():
     )
 
 
+@app.route("/leaderboard")
+def leaderboard():
+    rows = g.sb.table("leaderboard").select("*").order("points", desc=True).execute()
+    entries = rows.data or []
+    my_entry = next((e for e in entries if e["id"] == g.user_id), None)
+    return render_template("leaderboard.html", entries=entries, my_entry=my_entry)
+
+
 # --------------------------------------------------------------------------
 # Live walking map (badges spawn around the user, fixed in place; walk to
 # one and check in to claim it, Pokemon-Go style) - the main feature
@@ -550,4 +595,7 @@ def badges_claim():
 
 if __name__ == "__main__":
     init_db()
-    app.run(debug=True, port=5050)
+    # allow_unsafe_werkzeug: fine for local dev (this app has always run on
+    # Flask's own dev server, never a production WSGI server); Flask-SocketIO
+    # just wants an explicit opt-in for that on top of plain Werkzeug.
+    socketio.run(app, debug=True, port=5050, allow_unsafe_werkzeug=True)

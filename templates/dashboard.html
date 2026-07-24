@@ -38,19 +38,20 @@
 
 {% endblock %}
 {% block scripts %}
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 <script>
 // Quietly refresh weather using live GPS instead of the self-reported city,
 // if the browser already has (or silently grants) location access.
 if (navigator.geolocation) {
-  navigator.geolocation.getCurrentPosition(async (pos) => {
+  navigator.geolocation.getCurrentPosition((pos) => {
     const { latitude, longitude } = pos.coords;
-    await postJSON('/location/update', { lat: latitude, lon: longitude });
-    const res = await fetch(`/api/weather?lat=${latitude}&lon=${longitude}`);
-    const w = await res.json();
-    const chip = document.getElementById('weather-chip');
-    if (chip && w.emoji) {
-      chip.textContent = `${w.emoji} ${w.temp_f}°F · ${w.label} · ${w.place_name || 'your area'}`;
-    }
+    sendLocation(latitude, longitude);
+    fetch(`/api/weather?lat=${latitude}&lon=${longitude}`).then(res => res.json()).then(w => {
+      const chip = document.getElementById('weather-chip');
+      if (chip && w.emoji) {
+        chip.textContent = `${w.emoji} ${w.temp_f}°F · ${w.label} · ${w.place_name || 'your area'}`;
+      }
+    });
   }, () => { /* no permission yet - keep the city-based weather shown */ }, { maximumAge: 300000 });
 }
 </script>

@@ -60,6 +60,7 @@
 {% endblock %}
 {% block scripts %}
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 <script>
 let badges = {{ badges_json|safe }};
 const statusPill = document.getElementById('status-pill');
@@ -276,7 +277,7 @@ function onPosition(pos) {
     updateUserHeading(heading, 'gps');
   }
 
-  postJSON('/location/update', { lat: latitude, lon: longitude });
+  sendLocation(latitude, longitude);
   checkNearbyBadges(latitude, longitude);
   maybeTopUpBadges(latitude, longitude);
 }

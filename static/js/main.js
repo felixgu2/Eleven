@@ -20,6 +20,17 @@ async function postJSON(url, data) {
   return res.json();
 }
 
+// Push the user's GPS position over a persistent WebSocket instead of
+// opening a fresh HTTP request every time it changes. Pages that need
+// this (dashboard, map) include the Socket.IO client script themselves
+// before calling sendLocation(); other pages never pay for the connection.
+let _locationSocket = null;
+function sendLocation(lat, lon) {
+  if (typeof io === 'undefined') return;
+  if (!_locationSocket) _locationSocket = io();
+  _locationSocket.emit('location_update', { lat, lon });
+}
+
 // Report the browser's real timezone once per session so the server can
 // compute "today" / "this hour" correctly instead of using its own clock.
 (function reportTimezone() {

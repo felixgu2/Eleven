@@ -64,3 +64,20 @@ drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created
     after insert on auth.users
     for each row execute function public.handle_new_user();
+
+-- Leaderboard: profiles' own RLS policy only lets each user see their own
+-- row, so a plain query across all users would return nothing for anyone
+-- else. This view exposes just the fields needed for a public leaderboard
+-- (name + points, never email/city/measurements) and - because views run
+-- with their owner's privileges rather than the querying user's - it
+-- bypasses the per-row RLS restriction on the underlying table entirely.
+create or replace view public.leaderboard as
+    select
+        id,
+        name,
+        points,
+        row_number() over (order by points desc, created_at asc) as rank
+    from public.profiles
+    order by points desc, created_at asc;
+
+grant select on public.leaderboard to authenticated;

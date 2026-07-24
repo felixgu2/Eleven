@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Leaderboard{% endblock %}
+{% block topbar %}
+<div class="topbar">
+  <h1>Leaderboard</h1>
+  <span></span>
+</div>
+{% endblock %}
+{% block content %}
+
+{% if my_entry %}
+<div class="mission-card full-width">
+  <div class="kicker">Your Rank</div>
+  <h3>#{{ my_entry['rank'] }} &middot; {{ my_entry['points'] }} pts</h3>
+  <p>Claim more badges on the Walking Map to climb the board.</p>
+</div>
+{% endif %}
+
+<div class="card">
+  {% if entries %}
+  <div class="leaderboard-list">
+    {% for e in entries %}
+    <div class="leaderboard-row {% if e['id'] == g.user_id %}me{% endif %}">
+      <span class="leaderboard-rank {% if e['rank'] <= 3 %}top{{ e['rank'] }}{% endif %}">
+        {% if e['rank'] == 1 %}🥇{% elif e['rank'] == 2 %}🥈{% elif e['rank'] == 3 %}🥉{% else %}#{{ e['rank'] }}{% endif %}
+      </span>
+      <span class="leaderboard-name">{{ e['name'] }}{% if e['id'] == g.user_id %} (You){% endif %}</span>
+      <span class="leaderboard-points">⭐ {{ e['points'] }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state">No one has earned points yet — be the first!</div>
+  {% endif %}
+</div>
+
+{% endblock %}
