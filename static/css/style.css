@@ -74,7 +74,11 @@ button { font-family: inherit; }
     justify-content: space-between;
     padding: 16px 40px;
   }
-  .site-header .brand { font-size: 18px; font-weight: 800; color: var(--primary-dark); }
+  .site-header .brand {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 18px; font-weight: 800; color: var(--primary-dark);
+  }
+  .site-header .brand-icon { height: 32px; width: auto; }
   .site-nav { display: flex; gap: 28px; }
   .site-nav a { font-size: 14px; font-weight: 600; color: var(--text-muted); }
   .site-nav a.active { color: var(--primary); }
@@ -189,6 +193,8 @@ button { font-family: inherit; }
   background: linear-gradient(180deg, #eafaf3 0%, #f4f9f6 60%);
 }
 .onboarding .logo { font-size: 64px; margin-bottom: 8px; }
+.onboarding-logo { width: 220px; max-width: 70vw; height: auto; margin-bottom: 8px; }
+.auth-logo-icon { width: 88px; height: auto; margin-bottom: 8px; }
 .onboarding h1 { color: var(--primary-dark); font-size: 30px; margin: 0 0 12px; }
 .onboarding p { color: var(--text-muted); font-size: 15px; line-height: 1.5; margin-bottom: 36px; }
 .onboarding .btn-block { max-width: 320px; margin-bottom: 16px; }

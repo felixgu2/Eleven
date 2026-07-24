@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{% block title %}CareForward{% endblock %}</title>
+<title>{% block title %}WalkyMiles{% endblock %}</title>
+<link rel="icon" type="image/png" href="{{ url_for('static', filename='img/logo-icon.png') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 {% block head %}{% endblock %}
 </head>
@@ -12,7 +13,10 @@
   {% if not hide_nav or force_header %}
   <header class="site-header">
     <div class="site-header-inner">
-      <a href="{{ url_for('dashboard') }}" class="brand">💚 CareForward</a>
+      <a href="{{ url_for('dashboard') }}" class="brand">
+        <img src="{{ url_for('static', filename='img/logo-icon.png') }}" alt="WalkyMiles" class="brand-icon">
+        WalkyMiles
+      </a>
       <nav class="site-nav">
         <a href="{{ url_for('dashboard') }}" class="{% if request.endpoint == 'dashboard' %}active{% endif %}">Home</a>
         <a href="{{ url_for('map_page') }}" class="{% if request.endpoint == 'map_page' %}active{% endif %}">Map</a>

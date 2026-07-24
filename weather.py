@@ -127,7 +127,7 @@ def reverse_geocode(lat, lon):
         url = "https://nominatim.openstreetmap.org/reverse?" + urllib.parse.urlencode(
             {"format": "json", "lat": lat, "lon": lon, "zoom": 14, "addressdetails": 1}
         )
-        req = urllib.request.Request(url, headers={"User-Agent": "CareForward/1.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "WalkyMiles/1.0"})
         with urllib.request.urlopen(req, timeout=4) as resp:
             data = json.load(resp)
         address = data.get("address", {})

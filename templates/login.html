@@ -1,9 +1,9 @@
 {% extends "base.html" %}
-{% block title %}Log In - CareForward{% endblock %}
+{% block title %}Log In - WalkyMiles{% endblock %}
 {% set hide_nav = true %}
 {% block content %}
 <div class="onboarding" style="justify-content:flex-start; padding-top:60px;">
-  <div class="logo">💚</div>
+  <img src="{{ url_for('static', filename='img/logo-icon.png') }}" alt="WalkyMiles" class="auth-logo-icon">
   <h1>Welcome back</h1>
   <p>Log in to continue your recovery plan.</p>
 

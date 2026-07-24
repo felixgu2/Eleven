@@ -1,11 +1,11 @@
 {% extends "base.html" %}
-{% block title %}Sign Up - CareForward{% endblock %}
+{% block title %}Sign Up - WalkyMiles{% endblock %}
 {% set hide_nav = true %}
 {% block content %}
 <div class="onboarding" style="justify-content:flex-start; padding-top:60px;">
-  <div class="logo">💚</div>
+  <img src="{{ url_for('static', filename='img/logo-icon.png') }}" alt="WalkyMiles" class="auth-logo-icon">
   <h1>Create your account</h1>
-  <p>Set up CareForward to start tracking your recovery.</p>
+  <p>Set up WalkyMiles to start tracking your recovery.</p>
 
   {% if notice %}
     <div class="card" style="width:100%; max-width:340px; text-align:center; color:var(--primary-dark);">{{ notice }}</div>
