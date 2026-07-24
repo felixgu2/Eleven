@@ -30,7 +30,25 @@
   .badge-marker.uncommon { border-color: #4a90d9; }
   .badge-marker.rare { border-color: #f5a623; box-shadow: 0 0 12px rgba(245,166,35,0.6); }
   .badge-marker.claimed { opacity: 0.35; filter: grayscale(1); }
-  .user-dot { width: 18px; height: 18px; border-radius: 50%; background: #1f8a68; border: 3px solid white; box-shadow: 0 0 0 3px rgba(31,138,104,0.35); }
+  .user-marker { position: relative; width: 36px; height: 36px; }
+  .user-dot {
+    position: absolute; left: 50%; top: 50%; width: 18px; height: 18px; margin: -9px 0 0 -9px;
+    border-radius: 50%; background: #1f8a68; border: 3px solid white; box-shadow: 0 0 0 3px rgba(31,138,104,0.35);
+    z-index: 2;
+  }
+  .user-cone {
+    position: absolute; left: 50%; top: 50%; width: 0; height: 0;
+    border-left: 9px solid transparent; border-right: 9px solid transparent;
+    border-bottom: 20px solid rgba(31,138,104,0.55);
+    transform-origin: 50% 100%;
+    transform: translate(-50%, -100%) rotate(0deg);
+    display: none;
+    z-index: 1;
+  }
+  .compass-btn {
+    background: white; border-radius: 999px; padding: 6px 12px; font-size: 13px; font-weight: 700;
+    box-shadow: var(--shadow); border: none; cursor: pointer;
+  }
   .leaflet-popup-content { font-size: 13px; text-align: center; }
 </style>
 {% endblock %}
@@ -38,7 +56,10 @@
 <div class="map-topbar">
   <a href="{{ url_for('dashboard') }}" class="back">←</a>
   <h1 style="font-size:17px; margin:0;">Walking Map</h1>
-  <span class="map-status-pill" id="status-pill">{{ claimed_count }} / {{ total_count or '?' }}</span>
+  <div style="display:flex; align-items:center; gap:8px;">
+    <button class="compass-btn" id="compass-btn" style="display:none;">🧭 Enable Compass</button>
+    <span class="map-status-pill" id="status-pill">{{ claimed_count }} / {{ total_count or '?' }}</span>
+  </div>
 </div>
 {% endblock %}
 {% block content %}
@@ -83,16 +104,72 @@ function haversineM(lat1, lon1, lat2, lon2) {
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 
+function userIconHtml() {
+  return '<div class="user-marker"><div class="user-cone" id="user-cone"></div><div class="user-dot"></div></div>';
+}
+
 function initMap(lat, lon) {
   map = L.map('map').setView([lat, lon], 17);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19,
     attribution: '&copy; OpenStreetMap contributors',
   }).addTo(map);
-  userMarker = L.marker([lat, lon], { icon: L.divIcon({ html: '<div class="user-dot"></div>', className: '', iconSize: [18, 18] }) }).addTo(map);
+  userMarker = L.marker([lat, lon], {
+    icon: L.divIcon({ html: userIconHtml(), className: '', iconSize: [36, 36], iconAnchor: [18, 18] }),
+  }).addTo(map);
   badges.forEach(plotBadge);
   updateStatusPill();
   setTimeout(() => map.invalidateSize(), 100);
+}
+
+// --- Direction-of-travel / compass heading on the user marker ---
+// GPS heading (direction you're actually walking) takes priority since
+// it's the most meaningful signal for a walking app; device compass
+// fills in when you're standing still and GPS has no heading yet.
+let lastHeadingSource = null;
+
+function updateUserHeading(heading, source) {
+  if (heading == null || Number.isNaN(heading)) return;
+  if (source === 'compass' && lastHeadingSource === 'gps') return; // GPS wins while moving
+  lastHeadingSource = source;
+  if (!userMarker) return;
+  const el = userMarker.getElement();
+  const cone = el && el.querySelector('.user-cone');
+  if (cone) {
+    cone.style.display = 'block';
+    cone.style.transform = `translate(-50%, -100%) rotate(${heading}deg)`;
+  }
+}
+
+function handleOrientation(event) {
+  let heading = null;
+  if (typeof event.webkitCompassHeading === 'number') {
+    heading = event.webkitCompassHeading; // iOS Safari: already clockwise from true north
+  } else if (event.absolute && typeof event.alpha === 'number') {
+    heading = (360 - event.alpha) % 360; // standard DeviceOrientationEvent approximation
+  }
+  updateUserHeading(heading, 'compass');
+}
+
+function enableCompass() {
+  window.addEventListener('deviceorientationabsolute', handleOrientation, true);
+  window.addEventListener('deviceorientation', handleOrientation, true);
+}
+
+const compassBtn = document.getElementById('compass-btn');
+if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+  // iOS 13+ requires an explicit user gesture to grant compass access.
+  compassBtn.style.display = 'inline-flex';
+  compassBtn.addEventListener('click', () => {
+    DeviceOrientationEvent.requestPermission().then((state) => {
+      if (state === 'granted') {
+        enableCompass();
+        compassBtn.style.display = 'none';
+      }
+    }).catch(() => {});
+  });
+} else if (window.DeviceOrientationEvent) {
+  enableCompass();
 }
 
 // Keep the map's internal size in sync with its actual container size
@@ -124,11 +201,16 @@ async function checkNearbyBadges(lat, lon) {
 }
 
 function onPosition(pos) {
-  const { latitude, longitude } = pos.coords;
+  const { latitude, longitude, heading } = pos.coords;
   if (!map) {
     initMap(latitude, longitude);
   } else if (userMarker) {
     userMarker.setLatLng([latitude, longitude]);
+  }
+  if (heading != null && !Number.isNaN(heading)) {
+    updateUserHeading(heading, 'gps');
+  } else {
+    lastHeadingSource = null; // GPS lost its fix on heading - let compass take over again
   }
   postJSON('/location/update', { lat: latitude, lon: longitude });
   checkNearbyBadges(latitude, longitude);
