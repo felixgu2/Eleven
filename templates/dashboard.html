@@ -36,7 +36,7 @@
   </ol>
   {% endif %}
   {% if mission['safety_note'] %}<p class="mission-safety-light">{{ icons.icon('alert-triangle') }} {{ mission['safety_note'] }}</p>{% endif %}
-  {% if mission['encouragement'] %}<p style="font-style:italic; color:var(--text-muted); font-size:13px;">{{ mission['encouragement'] }}</p>{% endif %}
+  {% if mission['encouragement'] %}<p id="mission-encouragement" style="font-style:italic; color:var(--text-muted); font-size:13px; {% if not mission['completed'] %}display:none;{% endif %}">{{ mission['encouragement'] }}</p>{% endif %}
   {% if mission['completed'] %}
   <div class="mission-complete-chip" id="mission-complete-chip">{{ icons.icon('check-circle') }} Completed</div>
   {% else %}
@@ -76,6 +76,8 @@ if (missionCompleteBtn) {
       chip.className = 'mission-complete-chip';
       chip.innerHTML = ICONS['check-circle'] + ' Completed';
       missionCompleteBtn.replaceWith(chip);
+      const encouragement = document.getElementById('mission-encouragement');
+      if (encouragement) encouragement.style.display = '';
     } else {
       missionCompleteBtn.disabled = false;
     }
