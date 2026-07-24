@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Weekly Report{% endblock %}
+{% block topbar %}
+<div class="topbar">
+  <a href="{{ url_for('dashboard') }}" class="back">←</a>
+  <h1>Weekly Report</h1>
+  <span style="font-size:18px;">🔗</span>
+</div>
+{% endblock %}
+{% block content %}
+<p style="color:var(--text-muted); font-size:13px; margin-top:-6px;">{{ start }} – {{ end }}</p>
+
+<div class="card">
+  <div class="report-stats">
+    <div class="stat"><div class="value">{{ active_minutes_total }}</div><div class="label">Active Minutes</div></div>
+    <div class="stat"><div class="value">{{ sessions }}</div><div class="label">Sessions</div></div>
+    <div class="stat"><div class="value">{{ goal_pct }}%</div><div class="label">Goal Achieved</div></div>
+  </div>
+</div>
+
+<div class="card">
+  <h3>Highlights</h3>
+  {% for h in highlights %}
+  <div class="highlight-item">✔️ {{ h }}</div>
+  {% endfor %}
+</div>
+
+<div class="field-label">Export / Share</div>
+<div class="settings-list" style="margin-bottom:20px;">
+  <div class="row" style="cursor:pointer;" onclick="window.print()">
+    <span>📥 Download PDF</span><span class="chevron">›</span>
+  </div>
+  <div class="row" style="cursor:pointer;" onclick="showToast('Report shared with Doctor')">
+    <span>🩺 Share with Doctor</span><span class="chevron">›</span>
+  </div>
+  <div class="row" style="cursor:pointer;" onclick="showToast('Report shared with Caregiver')">
+    <span>👨‍👩‍👧 Share with Caregiver</span><span class="chevron">›</span>
+  </div>
+</div>
+{% endblock %}

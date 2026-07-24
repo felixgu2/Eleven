@@ -1,0 +1,198 @@
+{% extends "base.html" %}
+{% block title %}CareForward - Home{% endblock %}
+{% set wide = true %}
+{% block topbar %}
+<div class="topbar wide">
+  <span style="font-size:20px;">☰</span>
+  <a href="{{ url_for('notifications') }}" class="icon-btn">🔔
+    {% if unread_count > 0 %}<span class="badge">{{ unread_count }}</span>{% endif %}
+  </a>
+</div>
+{% endblock %}
+{% block content %}
+
+<div class="full-width" style="display:flex; justify-content:space-between; align-items:center; margin:6px 0 2px;">
+  <h2 style="margin:0;">{{ greeting }}, {{ user['name'] }} 👋</h2>
+  <span class="points-chip">⭐ {{ user['points'] }}</span>
+</div>
+<p class="full-width" style="color:var(--text-muted); margin-top:0; font-size:14px;">Let's take care of your recovery today.</p>
+{% if weather %}
+<div class="weather-chip full-width">{{ weather.emoji }} {{ weather.temp_f }}°F · {{ weather.label }} · {{ user['city'] }}</div>
+{% endif %}
+
+{% if nudge %}
+<div class="nudge-banner full-width">
+  <span style="font-size:18px;">🔮</span>
+  <div>{{ nudge }}</div>
+</div>
+{% endif %}
+
+{% if mission %}
+<div class="mission-card full-width">
+  <div class="kicker">Today's AI Mission</div>
+  <h3>{{ mission['title'] }}</h3>
+  <p>{{ mission['narrative'] }}</p>
+  <a href="{{ url_for('plan') if plan_items else url_for('checkin') }}" class="btn btn-secondary btn-sm">Begin Mission</a>
+</div>
+{% endif %}
+
+<div class="card">
+  <h3>How do you feel today?</h3>
+  <div class="choice-grid" id="mood-grid">
+    <div class="choice-pill mood-pill {% if checkin and checkin['mood']=='low' %}selected{% endif %}" data-mood="low">
+      <span class="emoji">😔</span>Low
+    </div>
+    <div class="choice-pill mood-pill {% if checkin and checkin['mood']=='okay' %}selected{% endif %}" data-mood="okay">
+      <span class="emoji">😐</span>Okay
+    </div>
+    <div class="choice-pill mood-pill {% if checkin and checkin['mood']=='good' %}selected{% endif %}" data-mood="good">
+      <span class="emoji">🙂</span>Good
+    </div>
+    <div class="choice-pill mood-pill {% if checkin and checkin['mood']=='great' %}selected{% endif %}" data-mood="great">
+      <span class="emoji">🤩</span>Great
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h3>Today's Plan</h3>
+  {% if plan_items %}
+    <div style="font-weight:600; font-size:14px;">{{ plan_items|length }}-Activity Routine</div>
+    <div style="color:var(--text-muted); font-size:12px; margin-bottom:14px;">
+      {{ plan_items|selectattr('completed')|list|length }} of {{ plan_items|length }} done
+    </div>
+    <a href="{{ url_for('plan') }}" class="btn btn-primary btn-block">Continue Plan</a>
+  {% else %}
+    <div style="font-weight:600; font-size:14px;">10-Minute Mobility</div>
+    <div style="color:var(--text-muted); font-size:12px; margin-bottom:14px;">Low impact • No equipment</div>
+    <a href="{{ url_for('checkin') }}" class="btn btn-primary btn-block">Start Now</a>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h3>Daily Progress</h3>
+  <div class="progress-ring-wrap">
+    <div class="progress-ring">
+      <svg width="90" height="90" viewBox="0 0 90 90">
+        <circle cx="45" cy="45" r="38" stroke="#e3ede8" stroke-width="9" fill="none"/>
+        <circle cx="45" cy="45" r="38" stroke="#1f8a68" stroke-width="9" fill="none"
+          stroke-dasharray="238.76" stroke-dashoffset="{{ 238.76 * (1 - progress_pct/100) }}"
+          stroke-linecap="round"/>
+      </svg>
+      <div class="pct">{{ progress_pct }}%</div>
+    </div>
+    <div>
+      <div style="font-size:12px; color:var(--text-muted);">Goal: {{ stats['goal_minutes'] }} active min</div>
+      <div class="stat-row">
+        <div>
+          <div class="stat-value">{{ stats['steps'] }}</div>
+          <div class="stat-label">Steps</div>
+        </div>
+        <div>
+          <div class="stat-value">{{ stats['active_minutes'] }} min</div>
+          <div class="stat-label">Active Minutes</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card quest-card" id="quest-card"
+     data-status="{{ quest['status'] if quest else 'none' }}"
+     data-target-lat="{{ quest['target_lat'] if quest else '' }}"
+     data-target-lon="{{ quest['target_lon'] if quest else '' }}"
+     data-radius="{{ quest['radius_m'] if quest else '' }}"
+     data-reward-label="{{ quest['reward_label'] if quest else '' }}"
+     data-reward-points="{{ quest['reward_points'] if quest else '' }}"
+     data-weather-ok="{{ 'true' if weather and weather.good_for_outdoors else 'false' }}">
+  <h3>🚶 Walking Quest</h3>
+  {% if quest and quest['status'] == 'claimed' %}
+    <div class="quest-status">Quest complete for today!</div>
+    <div class="distance-readout">{{ quest['reward_label'] }}</div>
+    <div style="font-size:12px; color:var(--text-muted);">+{{ quest['reward_points'] }} points earned</div>
+  {% elif quest %}
+    <div class="quest-status" id="quest-status-text">Walk toward your target — distance updates live.</div>
+    <div class="distance-readout" id="quest-distance">-- m away</div>
+    <div style="font-size:12px; color:var(--text-muted);">Reward: {{ quest['reward_label'] }} (+{{ quest['reward_points'] }} pts)</div>
+  {% elif weather and weather.good_for_outdoors %}
+    <div class="quest-status">A short walk nearby today earns a weather-themed badge. Requires location access.</div>
+    <button class="btn btn-secondary btn-block" id="start-quest-btn">📍 Start Walking Quest</button>
+  {% else %}
+    <div class="quest-status">{{ weather.label if weather else 'Current conditions' }} isn't great for a walking quest today — check back tomorrow.</div>
+  {% endif %}
+</div>
+
+{% endblock %}
+{% block scripts %}
+<script>
+document.querySelectorAll('.mood-pill').forEach(el => {
+  el.addEventListener('click', async () => {
+    document.querySelectorAll('.mood-pill').forEach(p => p.classList.remove('selected'));
+    el.classList.add('selected');
+    await postJSON("{{ url_for('dashboard_mood') }}", { mood: el.dataset.mood });
+    showToast('Mood logged');
+  });
+});
+
+// --- Walking Quest ---
+const questCard = document.getElementById('quest-card');
+let questWatchId = null;
+
+function haversineM(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const toRad = d => d * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1), dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+function watchQuest(targetLat, targetLon) {
+  if (!navigator.geolocation) return;
+  questWatchId = navigator.geolocation.watchPosition(async (pos) => {
+    const { latitude, longitude } = pos.coords;
+    const res = await postJSON('/quest/check', { lat: latitude, lon: longitude });
+    const distEl = document.getElementById('quest-distance');
+    if (distEl && typeof res.distance_m === 'number') {
+      distEl.textContent = `${res.distance_m} m away`;
+    }
+    if (res.just_claimed) {
+      navigator.geolocation.clearWatch(questWatchId);
+      showToast(`🎉 ${res.reward_label} earned! +${res.reward_points} pts`);
+      setTimeout(() => window.location.reload(), 1800);
+    }
+  }, () => {}, { enableHighAccuracy: true, maximumAge: 5000 });
+}
+
+const startQuestBtn = document.getElementById('start-quest-btn');
+if (startQuestBtn) {
+  startQuestBtn.addEventListener('click', () => {
+    if (!navigator.geolocation) {
+      showToast('Geolocation is not supported in this browser.');
+      return;
+    }
+    startQuestBtn.disabled = true;
+    startQuestBtn.textContent = 'Locating…';
+    navigator.geolocation.getCurrentPosition(async (pos) => {
+      const { latitude, longitude } = pos.coords;
+      const res = await postJSON('/quest/start', { lat: latitude, lon: longitude });
+      if (res.quest) {
+        showToast('Quest started — head toward your target!');
+        setTimeout(() => window.location.reload(), 900);
+      } else {
+        showToast(res.reason || 'No quest available today.');
+        startQuestBtn.disabled = false;
+        startQuestBtn.textContent = '📍 Start Walking Quest';
+      }
+    }, () => {
+      showToast('Location permission is needed for the walking quest.');
+      startQuestBtn.disabled = false;
+      startQuestBtn.textContent = '📍 Start Walking Quest';
+    });
+  });
+}
+
+if (questCard.dataset.status === 'active') {
+  watchQuest(parseFloat(questCard.dataset.targetLat), parseFloat(questCard.dataset.targetLon));
+}
+</script>
+{% endblock %}

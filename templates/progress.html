@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Your Progress{% endblock %}
+{% set wide = true %}
+{% block topbar %}
+<div class="topbar wide">
+  <a href="{{ url_for('dashboard') }}" class="back">←</a>
+  <h1>Your Progress</h1>
+  <span style="width:20px;"></span>
+</div>
+{% endblock %}
+{% block content %}
+<div class="tab-row full-width">
+  <button class="active" data-tab="week">Week</button>
+  <button data-tab="month">Month</button>
+  <button data-tab="year">Year</button>
+</div>
+
+<div class="card full-width">
+  <h3>Active Minutes (last 7 days)</h3>
+  <div style="position:relative; height:180px; width:100%;">
+    <canvas id="minutesChart"></canvas>
+  </div>
+  <div class="week-dots" style="margin-top:14px;">
+    {% for label in labels_list %}
+    <div class="day">
+      <div class="dot {% if attended[loop.index0] %}done{% endif %}">{% if attended[loop.index0] %}✓{% endif %}</div>
+      <span>{{ label }}</span>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="card">
+  <h3>Active Minutes</h3>
+  <div class="bar-label-row"><span>Today</span><span>{{ today_stats['active_minutes'] if today_stats else 0 }} / {{ goal_minutes }} min</span></div>
+  <div class="bar-track"><div class="bar-fill endurance" style="width:{{ [100, ((today_stats['active_minutes'] if today_stats else 0) / goal_minutes * 100)|round|int]|min }}%;"></div></div>
+</div>
+
+<div class="card">
+  <h3>Movement Categories</h3>
+  <div class="bar-label-row"><span>Endurance</span><span>{{ today_stats['endurance_pct'] if today_stats else 0 }}%</span></div>
+  <div class="bar-track"><div class="bar-fill endurance" style="width:{{ today_stats['endurance_pct'] if today_stats else 0 }}%;"></div></div>
+  <div class="bar-label-row"><span>Strength</span><span>{{ today_stats['strength_pct'] if today_stats else 0 }}%</span></div>
+  <div class="bar-track"><div class="bar-fill strength" style="width:{{ today_stats['strength_pct'] if today_stats else 0 }}%;"></div></div>
+  <div class="bar-label-row"><span>Mobility</span><span>{{ today_stats['mobility_pct'] if today_stats else 0 }}%</span></div>
+  <div class="bar-track"><div class="bar-fill mobility" style="width:{{ today_stats['mobility_pct'] if today_stats else 0 }}%;"></div></div>
+  <div class="bar-label-row"><span>Balance</span><span>{{ today_stats['balance_pct'] if today_stats else 0 }}%</span></div>
+  <div class="bar-track"><div class="bar-fill balance" style="width:{{ today_stats['balance_pct'] if today_stats else 0 }}%;"></div></div>
+</div>
+
+<div class="card">
+  <h3>Personal Improvement</h3>
+  {% if first_walk is not none %}
+    <div style="font-size:12px; color:var(--text-muted); margin-bottom:4px;">Longest walk</div>
+    <div class="improvement-row">{{ first_walk }} min <span style="color:var(--text-muted); font-size:14px;">→</span> {{ last_walk }} min 📈</div>
+  {% else %}
+    <div class="empty-state">Complete an Indoor Walk exercise a few times to see your improvement here.</div>
+  {% endif %}
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script>
+document.querySelectorAll('.tab-row button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-row button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    if (btn.dataset.tab !== 'week') showToast('Month/Year views are coming soon');
+  });
+});
+
+const ctx = document.getElementById('minutesChart');
+new Chart(ctx, {
+  type: 'bar',
+  data: {
+    labels: {{ labels|safe }},
+    datasets: [{
+      label: 'Active minutes',
+      data: {{ active_minutes|safe }},
+      backgroundColor: '#1f8a68',
+      borderRadius: 6,
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: { y: { beginAtZero: true } }
+  }
+});
+</script>
+{% endblock %}

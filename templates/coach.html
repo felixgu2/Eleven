@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block title %}AI Coach{% endblock %}
+{% block topbar %}
+<div class="topbar">
+  <a href="{{ url_for('dashboard') }}" class="back">←</a>
+  <h1>AI Coach</h1>
+  <span style="width:20px;"></span>
+</div>
+{% endblock %}
+{% block content %}
+<div class="chat-scroll" id="chat-scroll" style="padding-bottom:60px;">
+  {% for m in messages %}
+    <div class="bubble {{ m.sender }}">{{ m.text }}</div>
+    {% if m.extra and m.extra.routine %}
+    <div class="routine-card">
+      <h4>Suggested Routine</h4>
+      <div class="meta">{{ m.extra.routine|length }}-Minute Mobility • {{ m.extra.minutes }} min total</div>
+      {% for ex in m.extra.routine %}
+        <div style="font-size:13px; padding:3px 0;">{{ ex.icon }} {{ ex.name }} — {{ ex.duration }} min{% if ex.reps %} • {{ ex.reps }} reps{% endif %}</div>
+      {% endfor %}
+      <a href="{{ url_for('checkin') }}" class="btn btn-secondary btn-sm" style="margin-top:8px;">View Routine</a>
+    </div>
+    {% endif %}
+  {% endfor %}
+</div>
+<div class="chat-input-row">
+  <button class="mic-btn" id="mic-btn" title="Hold to speak">🎤</button>
+  <input type="text" id="chat-text" placeholder="Type a message...">
+  <button class="btn btn-primary btn-sm" id="send-btn">Send</button>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const scrollEl = document.getElementById('chat-scroll');
+scrollEl.scrollTop = scrollEl.scrollHeight;
+
+function addBubble(sender, text) {
+  const div = document.createElement('div');
+  div.className = `bubble ${sender}`;
+  div.textContent = text;
+  scrollEl.appendChild(div);
+}
+
+function addRoutineCard(routine, minutes) {
+  const wrap = document.createElement('div');
+  wrap.className = 'routine-card';
+  let html = `<h4>Suggested Routine</h4><div class="meta">${routine.length}-Minute Mobility • ${minutes} min total</div>`;
+  routine.forEach(ex => {
+    html += `<div style="font-size:13px; padding:3px 0;">${ex.icon} ${ex.name} — ${ex.duration} min${ex.reps ? ' • ' + ex.reps + ' reps' : ''}</div>`;
+  });
+  html += `<a href="/checkin" class="btn btn-secondary btn-sm" style="margin-top:8px;">View Routine</a>`;
+  wrap.innerHTML = html;
+  scrollEl.appendChild(wrap);
+}
+
+async function sendMessage(text) {
+  if (!text.trim()) return;
+  addBubble('user', text);
+  scrollEl.scrollTop = scrollEl.scrollHeight;
+  const res = await postJSON("{{ url_for('coach_message') }}", { text });
+  if (res.ok) {
+    addBubble('coach', res.reply);
+    if (res.routine) addRoutineCard(res.routine, res.routine_minutes);
+    scrollEl.scrollTop = scrollEl.scrollHeight;
+  }
+}
+
+const input = document.getElementById('chat-text');
+document.getElementById('send-btn').addEventListener('click', () => {
+  sendMessage(input.value);
+  input.value = '';
+});
+input.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    sendMessage(input.value);
+    input.value = '';
+  }
+});
+
+// Optional voice input via Web Speech API (press and hold the mic).
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+const micBtn = document.getElementById('mic-btn');
+if (SpeechRecognition) {
+  const recognition = new SpeechRecognition();
+  recognition.continuous = false;
+  recognition.interimResults = false;
+  recognition.onresult = (e) => {
+    const transcript = e.results[0][0].transcript;
+    input.value = transcript;
+  };
+  recognition.onend = () => { micBtn.classList.remove('listening'); };
+  const start = () => { try { recognition.start(); micBtn.classList.add('listening'); } catch (e) {} };
+  const stop = () => { try { recognition.stop(); } catch (e) {} };
+  micBtn.addEventListener('mousedown', start);
+  micBtn.addEventListener('touchstart', start);
+  micBtn.addEventListener('mouseup', stop);
+  micBtn.addEventListener('mouseleave', stop);
+  micBtn.addEventListener('touchend', stop);
+} else {
+  micBtn.addEventListener('click', () => showToast('Voice input not supported in this browser — please type instead.'));
+}
+</script>
+{% endblock %}

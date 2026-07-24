@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Wound Photo Log{% endblock %}
+{% block topbar %}
+<div class="topbar">
+  <a href="{{ url_for('dashboard') }}" class="back">←</a>
+  <h1>Wound Photo Log</h1>
+  <span style="font-size:18px;">ℹ️</span>
+</div>
+{% endblock %}
+{% block content %}
+{% if latest %}
+<p style="color:var(--text-muted); font-size:12px; margin-top:-6px;">{{ latest['date'] }}</p>
+{% endif %}
+
+<div class="photo-frame">
+  {% if latest %}
+    <img src="{{ url_for('static', filename='uploads/' + latest['filename']) }}" alt="Latest photo">
+  {% else %}
+    <div class="placeholder">No photo yet — take your first photo to start tracking.</div>
+  {% endif %}
+  <div class="outline-guide"></div>
+</div>
+
+<form method="post" action="{{ url_for('photolog_upload') }}" enctype="multipart/form-data" id="upload-form">
+  <input type="file" name="photo" accept="image/*" capture="environment" id="photo-input" style="display:none;" required>
+  <button type="button" class="btn btn-primary btn-block" id="photo-btn">📷 {{ 'Retake Photo' if latest else 'Take Photo' }}</button>
+</form>
+
+<div class="field-label">Progress Comparison</div>
+{% if comparison %}
+<div class="comparison-row">
+  {% for p in comparison %}
+  <div class="thumb">
+    <img src="{{ url_for('static', filename='uploads/' + p['filename']) }}" alt="Photo">
+    <div class="label">{{ p['date'] }}</div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty-state">Take a few photos over time to see a side-by-side comparison here.</div>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+<script>
+document.getElementById('photo-btn').addEventListener('click', () => {
+  document.getElementById('photo-input').click();
+});
+document.getElementById('photo-input').addEventListener('change', () => {
+  document.getElementById('upload-form').submit();
+});
+</script>
+{% endblock %}

@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}{{ item['name'] }}{% endblock %}
+{% set hide_nav = true %}
+{% block topbar %}
+<div class="topbar">
+  <a href="{{ url_for('plan') }}" class="back">←</a>
+  <h1>{{ item['name'] }}</h1>
+  <span style="width:20px;"></span>
+</div>
+{% endblock %}
+{% block content %}
+<div style="font-size:12px; color:var(--text-muted); margin-bottom:8px;">Step {{ position }} of {{ total }} • {{ desc }}</div>
+
+<div class="exercise-hero" id="hero">
+  <div class="form-badge" id="form-badge" style="display:none;">Good form!</div>
+  {% if item['reps'] %}<div class="rep-badge"><span id="rep-count">0</span> / {{ item['reps'] }} reps</div>{% endif %}
+  <span id="hero-icon">{{ icon }}</span>
+  <div class="timer-badge" id="timer-badge">--:--</div>
+</div>
+
+<div class="exercise-controls">
+  {% if item['reps'] %}
+  <button class="round-btn rep" id="rep-btn">+1</button>
+  {% endif %}
+  <button class="round-btn play" id="play-btn">▶️</button>
+  <button class="round-btn stop" id="stop-btn">⏹️</button>
+</div>
+
+<p style="text-align:center; color:var(--text-muted); font-size:13px;">Tap play to start the timer, log reps as you go, then stop when finished.</p>
+{% endblock %}
+{% block scripts %}
+<script>
+const durationSeconds = {{ (item['duration_min'] * 60)|int }};
+const itemId = {{ item['id'] }};
+const nextId = {{ next_id if next_id else 'null' }};
+const hasReps = {{ 'true' if item['reps'] else 'false' }};
+
+let remaining = durationSeconds;
+let running = false;
+let timer = null;
+let reps = 0;
+
+const timerBadge = document.getElementById('timer-badge');
+const playBtn = document.getElementById('play-btn');
+const formBadge = document.getElementById('form-badge');
+
+function fmt(s) {
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  return `${m}:${sec.toString().padStart(2, '0')}`;
+}
+timerBadge.textContent = fmt(remaining);
+
+function tick() {
+  remaining -= 1;
+  timerBadge.textContent = fmt(Math.max(0, remaining));
+  if (remaining <= 0) {
+    finish();
+  }
+}
+
+playBtn.addEventListener('click', () => {
+  running = !running;
+  playBtn.textContent = running ? '⏸️' : '▶️';
+  formBadge.style.display = running ? 'block' : 'none';
+  if (running) {
+    timer = setInterval(tick, 1000);
+  } else {
+    clearInterval(timer);
+  }
+});
+
+if (hasReps) {
+  document.getElementById('rep-btn').addEventListener('click', () => {
+    reps += 1;
+    document.getElementById('rep-count').textContent = reps;
+  });
+}
+
+document.getElementById('stop-btn').addEventListener('click', finish);
+
+let finished = false;
+async function finish() {
+  if (finished) return;
+  finished = true;
+  clearInterval(timer);
+  const secondsActive = durationSeconds - Math.max(0, remaining);
+  const result = await postJSON(`/exercise/${itemId}/complete`, {
+    reps: hasReps ? reps : null,
+    seconds: Math.max(secondsActive, 1),
+  });
+  if (result.next_id) {
+    window.location.href = `/exercise/${result.next_id}`;
+  } else {
+    window.location.href = "{{ url_for('plan') }}";
+  }
+}
+</script>
+{% endblock %}

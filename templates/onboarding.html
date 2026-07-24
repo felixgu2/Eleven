@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Welcome to CareForward{% endblock %}
+{% set hide_nav = true %}
+{% block content %}
+<div class="onboarding">
+  <div class="logo">💚</div>
+  <h1>CareForward</h1>
+  <p>Your daily partner for recovery, movement, and better health.</p>
+  <a href="{{ url_for('signup') }}" class="btn btn-primary btn-block" style="max-width:320px; text-align:center;">Get Started</a>
+  <div class="login-hint">Already have an account? <a href="{{ url_for('login') }}" class="link-btn">Log in</a></div>
+</div>
+{% endblock %}
