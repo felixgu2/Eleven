@@ -11,7 +11,6 @@ from supabase_auth.errors import AuthApiError
 
 import azure_agent
 import badge_engine
-from database import get_connection, init_db, seed_new_account
 from health import bmi_category, calculate_age
 from supabase_client import get_client
 from weather import get_weather, get_weather_by_coords, reverse_geocode
@@ -41,37 +40,38 @@ MIN_STEP_MOVEMENT_M = 2     # ignore GPS jitter smaller than this between fixes
 MAX_STEP_JUMP_M = 120       # ignore big jumps (fresh GPS fix, teleport) - not real walking
 
 # Live GPS position per user, kept in memory and updated over the
-# location_update WebSocket event (see near the bottom of this file).
-# Single-process assumption, same as the SQLite file used elsewhere.
-_live_locations = {}    # user_id -> (lat, lon)
-_socket_sid_users = {}  # socketio request.sid -> user_id, so a disconnect can be traced back
+# location_update WebSocket event (see near the bottom of this file). This
+# is just an ephemeral "where are they right now" cache used to compute the
+# gap between consecutive fixes - the actual walking-distance record it
+# feeds into (daily_activity) lives in Supabase, not here.
+_live_locations = {}  # user_id -> (lat, lon)
 
 
-# --------------------------------------------------------------------------
-# SQLite (day-to-day app data) setup / teardown
-# --------------------------------------------------------------------------
-
-def get_db():
-    if "db" not in g:
-        g.db = get_connection()
-    return g.db
-
-
-@app.teardown_appcontext
-def close_db(exception=None):
-    db = g.pop("db", None)
-    if db is not None:
-        db.close()
+def seed_new_account(sb, user_id, name):
+    """A welcome message so the Coach screen isn't empty on first login."""
+    sb.table("coach_messages").insert({
+        "user_id": user_id, "sender": "coach",
+        "text": f"Hi {name}, I'm your recovery coach. How are you feeling today?",
+    }).execute()
 
 
 # --------------------------------------------------------------------------
 # Supabase auth / identity
 # --------------------------------------------------------------------------
 
+def maybe_row(query):
+    """postgrest-py's .maybe_single().execute() returns None outright (not
+    an object with .data=None) when zero rows match, unlike every other
+    query builder method - this normalizes that into a plain dict-or-None
+    so call sites don't all need their own None-check for the response."""
+    resp = query.execute()
+    return resp.data if resp else None
+
+
 def fetch_profile(sb, user_id, email=None):
-    resp = sb.table("profiles").select("*").eq("id", user_id).maybe_single().execute()
-    if resp and resp.data:
-        return resp.data
+    row = maybe_row(sb.table("profiles").select("*").eq("id", user_id).maybe_single())
+    if row:
+        return row
     # The signup trigger should always create this row; fall back just in case.
     insert_resp = sb.table("profiles").insert({"id": user_id, "email": email}).execute()
     return insert_resp.data[0] if insert_resp.data else None
@@ -103,6 +103,28 @@ def load_identity():
 
     if request.endpoint is not None and request.endpoint not in PUBLIC_ENDPOINTS and g.user_id is None:
         return redirect(url_for("login"))
+
+
+def resolve_socket_identity():
+    """A lighter version of load_identity() for WebSocket event handlers.
+    Flask-SocketIO gives each event its own request context rebuilt from
+    the original connection's environ, so the session cookie is readable
+    here just like a normal request - but before_request itself never
+    runs for socket events, so this has to be called explicitly. Skips
+    the profile fetch load_identity() does, since location_update (the
+    only handler that needs this) fires often and doesn't need it."""
+    access_token = session.get("sb_access_token")
+    refresh_token = session.get("sb_refresh_token")
+    if not (access_token and refresh_token):
+        return None, None
+    sb = get_client()
+    try:
+        auth_resp = sb.auth.set_session(access_token, refresh_token)
+    except Exception:
+        return None, None
+    if not (auth_resp and auth_resp.session):
+        return None, None
+    return auth_resp.session.user.id, sb
 
 
 def user_tz():
@@ -146,13 +168,11 @@ def user_location():
     return _live_locations.get(g.user_id)
 
 
-def today_activity(db, user_id):
+def today_activity(sb, user_id):
     """(steps, distance_m) walked today, derived from GPS distance
     accumulated via the location_update WebSocket event."""
-    row = db.execute(
-        "SELECT distance_m FROM daily_activity WHERE user_id = ? AND session_date = ?",
-        (user_id, today_str()),
-    ).fetchone()
+    row = maybe_row(sb.table("daily_activity").select("distance_m")
+        .eq("user_id", user_id).eq("session_date", today_str()).maybe_single())
     distance_m = row["distance_m"] if row else 0
     return round(distance_m / STEP_LENGTH_M), distance_m
 
@@ -161,7 +181,7 @@ ACTIVE_DAY_DISTANCE_M = 200  # a day counts as "active" for trend purposes past 
 MISSION_HISTORY_DAYS = 7
 
 
-def collect_user_stats(db, user_id, profile, weather_now):
+def collect_user_stats(sb, user_id, profile, weather_now):
     """Single source of truth for 'what do we know about this user right
     now' - built once and consumed by both the daily mission generator
     and the AI Coach, so the two always reason from the same numbers and
@@ -170,16 +190,14 @@ def collect_user_stats(db, user_id, profile, weather_now):
     yesterday = (local_today() - timedelta(days=1)).isoformat()
     week_ago = (local_today() - timedelta(days=MISSION_HISTORY_DAYS)).isoformat()
 
-    steps_today, distance_today_m = today_activity(db, user_id)
+    steps_today, distance_today_m = today_activity(sb, user_id)
 
     # Full day-by-day walking history for the last week, not just a single
     # aggregate count - this is what actually gives the mission generator
     # and Coach "memory" of the whole week rather than only yesterday.
-    weekly_rows = db.execute(
-        "SELECT session_date, distance_m FROM daily_activity "
-        "WHERE user_id = ? AND session_date >= ? AND session_date < ? ORDER BY session_date",
-        (user_id, week_ago, today_str()),
-    ).fetchall()
+    weekly_rows = sb.table("daily_activity").select("session_date, distance_m") \
+        .eq("user_id", user_id).gte("session_date", week_ago).lt("session_date", today_str()) \
+        .order("session_date").execute().data
     weekly_days = [
         {
             "date": r["session_date"],
@@ -197,24 +215,16 @@ def collect_user_stats(db, user_id, profile, weather_now):
     yesterday_entry = next((d for d in weekly_days if d["date"] == yesterday), None)
     yesterday_distance_m = yesterday_entry["distance_m"] if yesterday_entry else 0
 
-    badges_today = db.execute(
-        "SELECT COUNT(*) AS c FROM badges WHERE user_id = ? AND session_date = ? AND status = 'claimed'",
-        (user_id, today_str()),
-    ).fetchone()["c"]
-    badges_yesterday = db.execute(
-        "SELECT COUNT(*) AS c FROM badges WHERE user_id = ? AND session_date = ? AND status = 'claimed'",
-        (user_id, yesterday),
-    ).fetchone()["c"]
+    badges_today = len(sb.table("badges").select("id") \
+        .eq("user_id", user_id).eq("session_date", today_str()).eq("status", "claimed").execute().data)
+    badges_yesterday = len(sb.table("badges").select("id") \
+        .eq("user_id", user_id).eq("session_date", yesterday).eq("status", "claimed").execute().data)
 
-    mission_history = db.execute(
-        "SELECT date, title, category, completed FROM missions "
-        "WHERE user_id = ? AND date >= ? AND date < ? ORDER BY date",
-        (user_id, week_ago, today_str()),
-    ).fetchall()
-    today_mission = db.execute(
-        "SELECT title, completed FROM missions WHERE user_id = ? AND date = ?",
-        (user_id, today_str()),
-    ).fetchone()
+    mission_history = sb.table("missions").select("date, title, category, completed") \
+        .eq("user_id", user_id).gte("date", week_ago).lt("date", today_str()) \
+        .order("date").execute().data
+    today_mission = maybe_row(sb.table("missions").select("title, completed")
+        .eq("user_id", user_id).eq("date", today_str()).maybe_single())
 
     return {
         "profile": profile,
@@ -324,10 +334,9 @@ _FALLBACK_MISSION = {
 }
 
 
-def get_or_create_mission(db, user_id, stats):
-    row = db.execute(
-        "SELECT * FROM missions WHERE user_id = ? AND date = ?", (user_id, today_str())
-    ).fetchone()
+def get_or_create_mission(sb, user_id, stats):
+    row = maybe_row(sb.table("missions").select("*")
+        .eq("user_id", user_id).eq("date", today_str()).maybe_single())
     if row:
         return row
 
@@ -336,24 +345,26 @@ def get_or_create_mission(db, user_id, stats):
     except Exception:
         mission = _FALLBACK_MISSION
 
-    # INSERT OR IGNORE: if a concurrent request already wrote today's
-    # mission between our SELECT above and here, keep that one instead
-    # of raising a UNIQUE(user_id, date) constraint error.
-    db.execute(
-        """INSERT OR IGNORE INTO missions (user_id, date, title, category, goal, instructions,
-           duration_minutes, difficulty, equipment, safety_note, alternative_mission, encouragement)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (user_id, today_str(), mission.get("mission_title", "Today's Mission"),
-         mission.get("category"), mission.get("goal"),
-         json.dumps(mission.get("instructions") or []),
-         mission.get("duration_minutes"), mission.get("difficulty"),
-         mission.get("equipment"), mission.get("safety_note"),
-         mission.get("alternative_mission"), mission.get("encouragement")),
-    )
-    db.commit()
-    return db.execute(
-        "SELECT * FROM missions WHERE user_id = ? AND date = ?", (user_id, today_str())
-    ).fetchone()
+    # ignore_duplicates: if a concurrent request already wrote today's
+    # mission between our SELECT above and here, keep that one instead of
+    # erroring on the (user_id, date) primary key conflict.
+    sb.table("missions").upsert({
+        "user_id": user_id,
+        "date": today_str(),
+        "title": mission.get("mission_title", "Today's Mission"),
+        "category": mission.get("category"),
+        "goal": mission.get("goal"),
+        "instructions": mission.get("instructions") or [],
+        "duration_minutes": mission.get("duration_minutes"),
+        "difficulty": mission.get("difficulty"),
+        "equipment": mission.get("equipment"),
+        "safety_note": mission.get("safety_note"),
+        "alternative_mission": mission.get("alternative_mission"),
+        "encouragement": mission.get("encouragement"),
+    }, on_conflict="user_id,date", ignore_duplicates=True).execute()
+
+    return maybe_row(sb.table("missions").select("*")
+        .eq("user_id", user_id).eq("date", today_str()).maybe_single())
 
 
 # --------------------------------------------------------------------------
@@ -388,7 +399,7 @@ def signup():
         if resp.session:
             session["sb_access_token"] = resp.session.access_token
             session["sb_refresh_token"] = resp.session.refresh_token
-            seed_new_account(get_db(), resp.user.id, name)
+            seed_new_account(sb, resp.user.id, name)
             return redirect(url_for("profile"))
 
         return render_template(
@@ -447,22 +458,6 @@ def set_timezone():
     return {"ok": True}
 
 
-@socketio.on("connect")
-def handle_socket_connect():
-    # Socket.IO events skip Flask's normal before_request dispatch, so the
-    # identity load has to be triggered explicitly here. The handshake is
-    # still a real HTTP request at this point, so the session cookie
-    # (and therefore g.user_id) is readable as usual.
-    load_identity()
-    if g.user_id:
-        _socket_sid_users[request.sid] = g.user_id
-
-
-@socketio.on("disconnect")
-def handle_socket_disconnect():
-    _socket_sid_users.pop(request.sid, None)
-
-
 @socketio.on("location_update")
 def handle_location_update(data):
     """Same job as a POST /location/update would have done, but pushed
@@ -471,7 +466,7 @@ def handle_location_update(data):
     accumulates today's walked distance from the gap between consecutive
     fixes, filtered to a sane walking-speed range so GPS jitter (too
     small) and a fresh-fix jump (too big) don't get counted as steps."""
-    user_id = _socket_sid_users.get(request.sid)
+    user_id, sb = resolve_socket_identity()
     if not user_id:
         return
     data = data or {}
@@ -484,16 +479,9 @@ def handle_location_update(data):
     if prev:
         moved_m = badge_engine.haversine_m(prev[0], prev[1], lat, lon)
         if MIN_STEP_MOVEMENT_M <= moved_m <= MAX_STEP_JUMP_M:
-            db = get_db()
-            db.execute(
-                """INSERT INTO daily_activity (user_id, session_date, distance_m)
-                   VALUES (?, ?, ?)
-                   ON CONFLICT(user_id, session_date)
-                   DO UPDATE SET distance_m = distance_m + excluded.distance_m,
-                                 updated_at = CURRENT_TIMESTAMP""",
-                (user_id, today_str(), moved_m),
-            )
-            db.commit()
+            sb.rpc("increment_daily_distance", {
+                "p_user_id": user_id, "p_date": today_str(), "p_delta": moved_m,
+            }).execute()
 
 
 @app.route("/api/weather")
@@ -520,18 +508,15 @@ def api_weather():
 
 @app.route("/dashboard")
 def dashboard():
-    db = get_db()
     user_id = g.user_id
 
     weather_now = current_weather()
-    stats = collect_user_stats(db, user_id, g.profile, weather_now)
-    mission_row = get_or_create_mission(db, user_id, stats)
-    mission = dict(mission_row)
-    mission["instructions"] = json.loads(mission["instructions"]) if mission["instructions"] else []
+    stats = collect_user_stats(g.sb, user_id, g.profile, weather_now)
+    mission = dict(get_or_create_mission(g.sb, user_id, stats))
+    mission["instructions"] = mission.get("instructions") or []
 
-    badges_today_total = db.execute(
-        "SELECT COUNT(*) AS c FROM badges WHERE user_id = ? AND session_date = ?", (user_id, today_str())
-    ).fetchone()["c"]
+    badges_today_total = len(g.sb.table("badges").select("id") \
+        .eq("user_id", user_id).eq("session_date", today_str()).execute().data)
 
     return render_template(
         "dashboard.html",
@@ -547,12 +532,9 @@ def dashboard():
 
 @app.route("/mission/complete", methods=["POST"])
 def mission_complete():
-    db = get_db()
-    db.execute(
-        "UPDATE missions SET completed = 1, completed_at = ? WHERE user_id = ? AND date = ?",
-        (local_now().isoformat(), g.user_id, today_str()),
-    )
-    db.commit()
+    g.sb.table("missions").update({
+        "completed": True, "completed_at": local_now().isoformat(),
+    }).eq("user_id", g.user_id).eq("date", today_str()).execute()
     return {"ok": True}
 
 
@@ -596,38 +578,31 @@ def coach_stats_context(stats):
 
 @app.route("/coach")
 def coach_page():
-    db = get_db()
-    rows = db.execute(
-        "SELECT * FROM coach_messages WHERE user_id = ? ORDER BY id", (g.user_id,)
-    ).fetchall()
+    rows = g.sb.table("coach_messages").select("sender, text") \
+        .eq("user_id", g.user_id).order("id").execute().data
     messages = [{"sender": r["sender"], "text": r["text"]} for r in rows]
-    steps, _ = today_activity(db, g.user_id)
+    steps, _ = today_activity(g.sb, g.user_id)
     return render_template("coach.html", messages=messages, steps=steps)
 
 
 @app.route("/coach/message", methods=["POST"])
 def coach_message():
-    db = get_db()
+    sb = g.sb
     user_id = g.user_id
     text = (request.json or {}).get("text", "").strip()
     if not text:
         return {"ok": False}, 400
 
-    db.execute(
-        "INSERT INTO coach_messages (user_id, sender, text) VALUES (?, 'user', ?)", (user_id, text)
-    )
-    db.commit()
+    sb.table("coach_messages").insert({"user_id": user_id, "sender": "user", "text": text}).execute()
 
-    history_rows = db.execute(
-        "SELECT sender, text FROM coach_messages WHERE user_id = ? ORDER BY id DESC LIMIT ?",
-        (user_id, COACH_HISTORY_LIMIT),
-    ).fetchall()
+    history_rows = sb.table("coach_messages").select("sender, text") \
+        .eq("user_id", user_id).order("id", desc=True).limit(COACH_HISTORY_LIMIT).execute().data
     history = [
         {"role": "assistant" if r["sender"] == "coach" else "user", "text": r["text"]}
         for r in reversed(history_rows)
     ]
 
-    stats = collect_user_stats(db, user_id, g.profile, current_weather())
+    stats = collect_user_stats(sb, user_id, g.profile, current_weather())
     context_text = coach_stats_context(stats)
 
     try:
@@ -635,11 +610,7 @@ def coach_message():
     except Exception:
         reply = "Sorry, I couldn't reach the coach right now — please try again in a moment."
 
-    db.execute(
-        "INSERT INTO coach_messages (user_id, sender, text) VALUES (?, 'coach', ?)",
-        (user_id, reply),
-    )
-    db.commit()
+    sb.table("coach_messages").insert({"user_id": user_id, "sender": "coach", "text": reply}).execute()
     return {"ok": True, "reply": reply}
 
 
@@ -667,11 +638,8 @@ def profile():
 
     profile_data = g.profile
     age = calculate_age(profile_data.get("date_of_birth"))
-    db = get_db()
-    achievements = db.execute(
-        "SELECT * FROM badges WHERE user_id = ? AND status = 'claimed' ORDER BY claimed_at DESC",
-        (g.user_id,),
-    ).fetchall()
+    achievements = g.sb.table("badges").select("*") \
+        .eq("user_id", g.user_id).eq("status", "claimed").order("claimed_at", desc=True).execute().data
     return render_template(
         "profile.html",
         user=profile_data,
@@ -697,12 +665,8 @@ def leaderboard():
 
 @app.route("/map")
 def map_page():
-    db = get_db()
-    rows = db.execute(
-        "SELECT * FROM badges WHERE user_id = ? AND session_date = ? ORDER BY id",
-        (g.user_id, today_str()),
-    ).fetchall()
-    badges = [dict(r) for r in rows]
+    badges = g.sb.table("badges").select("*") \
+        .eq("user_id", g.user_id).eq("session_date", today_str()).order("id").execute().data
     claimed_count = sum(1 for b in badges if b["status"] == "claimed")
     return render_template(
         "map.html", badges=badges, badges_json=json.dumps(badges),
@@ -720,17 +684,15 @@ def badges_spawn():
     number of calls) - since claiming requires a spawned badge, this
     also caps the number of claims/points a user can earn from the map
     each day."""
-    db = get_db()
+    sb = g.sb
     user_id = g.user_id
     payload = request.get_json(silent=True) or {}
     lat, lon = payload.get("lat"), payload.get("lon")
     if lat is None or lon is None:
         return {"ok": False, "error": "location required"}, 400
 
-    existing = [dict(r) for r in db.execute(
-        "SELECT * FROM badges WHERE user_id = ? AND session_date = ? ORDER BY id",
-        (user_id, today_str()),
-    ).fetchall()]
+    existing = sb.table("badges").select("*") \
+        .eq("user_id", user_id).eq("session_date", today_str()).order("id").execute().data
     total_today = len(existing)
 
     remaining_slots = DAILY_BADGE_COUNT - total_today
@@ -739,35 +701,31 @@ def badges_spawn():
         batch = min(batch, remaining_slots)
         weather_now = get_weather_by_coords(lat, lon)
         spawned = badge_engine.spawn_badges(lat, lon, weather=weather_now, count=batch)
-        for b in spawned:
-            db.execute(
-                """INSERT INTO badges (user_id, session_date, name, icon, description, rarity,
-                   lat, lon, radius_m, points, status)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')""",
-                (user_id, today_str(), b["name"], b["icon"], b["description"], b["rarity"],
-                 b["lat"], b["lon"], b["radius_m"], b["points"]),
-            )
-        db.commit()
+        sb.table("badges").insert([
+            {
+                "user_id": user_id, "session_date": today_str(),
+                "name": b["name"], "icon": b["icon"], "description": b["description"],
+                "rarity": b["rarity"], "lat": b["lat"], "lon": b["lon"],
+                "radius_m": b["radius_m"], "points": b["points"], "status": "active",
+            }
+            for b in spawned
+        ]).execute()
 
-    rows = db.execute(
-        "SELECT * FROM badges WHERE user_id = ? AND session_date = ? ORDER BY id",
-        (user_id, today_str()),
-    ).fetchall()
-    return {"ok": True, "badges": [dict(r) for r in rows]}
+    rows = sb.table("badges").select("*") \
+        .eq("user_id", user_id).eq("session_date", today_str()).order("id").execute().data
+    return {"ok": True, "badges": rows}
 
 
 @app.route("/badges/claim", methods=["POST"])
 def badges_claim():
-    db = get_db()
+    sb = g.sb
     user_id = g.user_id
     payload = request.get_json(silent=True) or {}
     lat, lon, badge_id = payload.get("lat"), payload.get("lon"), payload.get("badge_id")
     if lat is None or lon is None or badge_id is None:
         return {"ok": False}, 400
 
-    badge = db.execute(
-        "SELECT * FROM badges WHERE id = ? AND user_id = ?", (badge_id, user_id)
-    ).fetchone()
+    badge = maybe_row(sb.table("badges").select("*").eq("id", badge_id).eq("user_id", user_id).maybe_single())
     if not badge:
         return {"ok": False}, 404
 
@@ -776,13 +734,11 @@ def badges_claim():
         return {"ok": True, "claimed": True, "distance_m": round(distance)}
 
     if distance <= badge["radius_m"]:
-        db.execute(
-            "UPDATE badges SET status = 'claimed', claimed_at = ? WHERE id = ?",
-            (local_now().isoformat(), badge_id),
-        )
-        db.commit()
+        sb.table("badges").update({
+            "status": "claimed", "claimed_at": local_now().isoformat(),
+        }).eq("id", badge_id).execute()
         new_points = (g.profile.get("points") or 0) + badge["points"]
-        g.sb.table("profiles").update({"points": new_points}).eq("id", user_id).execute()
+        sb.table("profiles").update({"points": new_points}).eq("id", user_id).execute()
         return {
             "ok": True, "claimed": True, "just_claimed": True, "distance_m": round(distance),
             "name": badge["name"], "icon": badge["icon"], "points": badge["points"],
@@ -792,7 +748,6 @@ def badges_claim():
 
 
 if __name__ == "__main__":
-    init_db()
     # allow_unsafe_werkzeug: fine for local dev (this app has always run on
     # Flask's own dev server, never a production WSGI server); Flask-SocketIO
     # just wants an explicit opt-in for that on top of plain Werkzeug.

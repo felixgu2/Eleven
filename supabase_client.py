@@ -1,7 +1,6 @@
-"""Supabase connection helpers. Auth + user profile data (including
-health measurements) live in Supabase/Postgres; the rest of the app's
-day-to-day data is still on local SQLite for now and gets migrated
-feature-by-feature.
+"""Supabase connection helpers. Every piece of app data - auth, profiles,
+Coach chat, missions, badges, and daily walking distance - lives in
+Supabase/Postgres, scoped per user by row-level security.
 """
 import os
 

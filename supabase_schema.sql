@@ -81,3 +81,134 @@ create or replace view public.leaderboard as
     order by points desc, created_at asc;
 
 grant select on public.leaderboard to authenticated;
+
+-- --------------------------------------------------------------------------
+-- App data: AI Coach chat, AI daily Mission, Walking Map badges, and daily
+-- walking distance/steps. These used to live in a local SQLite file the
+-- user couldn't see; moved here so every record is visible in Supabase
+-- and each table is scoped by RLS the same way profiles already is.
+-- --------------------------------------------------------------------------
+
+create table if not exists public.coach_messages (
+    id bigint generated always as identity primary key,
+    user_id uuid not null references auth.users (id) on delete cascade,
+    sender text not null check (sender in ('user', 'coach')),
+    text text not null,
+    created_at timestamptz not null default now()
+);
+create index if not exists idx_coach_messages_user on public.coach_messages (user_id, id);
+
+alter table public.coach_messages enable row level security;
+drop policy if exists "Users manage their own coach messages" on public.coach_messages;
+create policy "Users manage their own coach messages"
+    on public.coach_messages
+    for all
+    using (auth.uid() = user_id)
+    with check (auth.uid() = user_id);
+
+-- One AI-generated mission per user per day, cached so it stays stable on
+-- reload. completed/completed_at are set only by the user's own "Mark as
+-- Complete" click - never inferred - and feed back into future missions
+-- and Coach answers as adherence history.
+create table if not exists public.missions (
+    user_id uuid not null references auth.users (id) on delete cascade,
+    date date not null,
+    title text not null,
+    category text,
+    goal text,
+    instructions jsonb not null default '[]'::jsonb,
+    duration_minutes integer,
+    difficulty text,
+    equipment text,
+    safety_note text,
+    alternative_mission text,
+    encouragement text,
+    completed boolean not null default false,
+    completed_at timestamptz,
+    created_at timestamptz not null default now(),
+    primary key (user_id, date)
+);
+
+alter table public.missions enable row level security;
+drop policy if exists "Users manage their own missions" on public.missions;
+create policy "Users manage their own missions"
+    on public.missions
+    for all
+    using (auth.uid() = user_id)
+    with check (auth.uid() = user_id);
+
+-- Live walking map badges. A batch spawns around the user's position and
+-- tops up gradually as they walk, fixed in place once spawned (they do not
+-- follow the user, Pokemon-Go style). Claimed rows are never deleted -
+-- they double as the permanent achievements record.
+create table if not exists public.badges (
+    id bigint generated always as identity primary key,
+    user_id uuid not null references auth.users (id) on delete cascade,
+    session_date date not null,
+    name text not null,
+    icon text not null,
+    description text,
+    rarity text not null default 'common',
+    lat double precision not null,
+    lon double precision not null,
+    radius_m integer not null default 30,
+    points integer not null default 10,
+    status text not null default 'active',
+    claimed_at timestamptz,
+    created_at timestamptz not null default now()
+);
+create index if not exists idx_badges_user_date on public.badges (user_id, session_date);
+create index if not exists idx_badges_user_status on public.badges (user_id, status);
+
+alter table public.badges enable row level security;
+drop policy if exists "Users manage their own badges" on public.badges;
+create policy "Users manage their own badges"
+    on public.badges
+    for all
+    using (auth.uid() = user_id)
+    with check (auth.uid() = user_id);
+
+-- Walking distance accumulated from consecutive live GPS fixes pushed over
+-- the location_update WebSocket event. Step count is derived from
+-- distance_m at read time rather than stored, so it can't drift.
+create table if not exists public.daily_activity (
+    user_id uuid not null references auth.users (id) on delete cascade,
+    session_date date not null,
+    distance_m double precision not null default 0,
+    updated_at timestamptz not null default now(),
+    primary key (user_id, session_date)
+);
+
+alter table public.daily_activity enable row level security;
+drop policy if exists "Users manage their own daily activity" on public.daily_activity;
+create policy "Users manage their own daily activity"
+    on public.daily_activity
+    for all
+    using (auth.uid() = user_id)
+    with check (auth.uid() = user_id);
+
+-- Atomic "add this many meters to today's total" - a plain client-side
+-- upsert can't express "distance_m = distance_m + delta" (it would just
+-- overwrite), and doing read-then-write from the app risks a lost update
+-- if two location pings land close together. security invoker (the
+-- default - stated explicitly here) means this still runs as the calling
+-- user, so the row-level security policy above is enforced exactly as if
+-- the app had run the insert/update directly.
+create or replace function public.increment_daily_distance(
+    p_user_id uuid, p_date date, p_delta double precision
+)
+returns void
+language plpgsql
+security invoker
+set search_path = public
+as $$
+begin
+    insert into public.daily_activity (user_id, session_date, distance_m)
+    values (p_user_id, p_date, p_delta)
+    on conflict (user_id, session_date)
+    do update set distance_m = public.daily_activity.distance_m + excluded.distance_m,
+                  updated_at = now();
+end;
+$$;
+
+grant execute on function public.increment_daily_distance(uuid, date, double precision) to authenticated;
