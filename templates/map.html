@@ -30,20 +30,11 @@
   .badge-marker.uncommon { border-color: #4a90d9; }
   .badge-marker.rare { border-color: #f5a623; box-shadow: 0 0 12px rgba(245,166,35,0.6); }
   .badge-marker.claimed { opacity: 0.35; filter: grayscale(1); }
-  .user-marker { position: relative; width: 36px; height: 36px; }
-  .user-dot {
-    position: absolute; left: 50%; top: 50%; width: 18px; height: 18px; margin: -9px 0 0 -9px;
-    border-radius: 50%; background: #1f8a68; border: 3px solid white; box-shadow: 0 0 0 3px rgba(31,138,104,0.35);
-    z-index: 2;
-  }
-  .user-cone {
-    position: absolute; left: 50%; top: 50%; width: 0; height: 0;
-    border-left: 9px solid transparent; border-right: 9px solid transparent;
-    border-bottom: 20px solid rgba(31,138,104,0.55);
-    transform-origin: 50% 100%;
-    transform: translate(-50%, -100%) rotate(0deg);
-    display: none;
-    z-index: 1;
+  .user-marker { position: relative; width: 40px; height: 40px; }
+  .user-heading-group {
+    transform-origin: 20px 20px;
+    transform: rotate(0deg);
+    transition: transform 0.25s ease;
   }
   .compass-btn {
     background: white; border-radius: 999px; padding: 6px 12px; font-size: 13px; font-weight: 700;
@@ -105,7 +96,17 @@ function haversineM(lat1, lon1, lat2, lon2) {
 }
 
 function userIconHtml() {
-  return '<div class="user-marker"><div class="user-cone" id="user-cone"></div><div class="user-dot"></div></div>';
+  // A solid arrow/chevron (like a navigation-app "you are here" pointer)
+  // instead of a plain dot, so it always reads as directional - even
+  // before any heading data has arrived it just points north until then.
+  return `<div class="user-marker">
+    <svg width="40" height="40" viewBox="0 0 40 40">
+      <g class="user-heading-group" id="user-heading-group">
+        <circle cx="20" cy="20" r="17" fill="rgba(31,138,104,0.18)"/>
+        <path d="M20 6 L29 30 L20 24 L11 30 Z" fill="#1f8a68" stroke="white" stroke-width="2.5" stroke-linejoin="round"/>
+      </g>
+    </svg>
+  </div>`;
 }
 
 function initMap(lat, lon) {
@@ -115,30 +116,48 @@ function initMap(lat, lon) {
     attribution: '&copy; OpenStreetMap contributors',
   }).addTo(map);
   userMarker = L.marker([lat, lon], {
-    icon: L.divIcon({ html: userIconHtml(), className: '', iconSize: [36, 36], iconAnchor: [18, 18] }),
+    icon: L.divIcon({ html: userIconHtml(), className: '', iconSize: [40, 40], iconAnchor: [20, 20] }),
   }).addTo(map);
   badges.forEach(plotBadge);
   updateStatusPill();
   setTimeout(() => map.invalidateSize(), 100);
 }
 
-// --- Direction-of-travel / compass heading on the user marker ---
-// GPS heading (direction you're actually walking) takes priority since
-// it's the most meaningful signal for a walking app; device compass
-// fills in when you're standing still and GPS has no heading yet.
-let lastHeadingSource = null;
+// --- Direction-of-travel on the user marker ---
+// Priority: bearing calculated from consecutive GPS fixes (most robust -
+// works on every device, no extra permission) > the browser's own
+// coords.heading (only populated on some devices while moving at speed)
+// > device compass (fills in while standing still, needs a tap on iOS).
+// A higher-priority source "wins" only while it's actively updating; once
+// it goes quiet (e.g. you've stopped walking) it goes stale and the next
+// best source is allowed to take over, so the arrow is never stuck.
+const HEADING_STALE_MS = { movement: 6000, gps: 6000 };
+const headingUpdatedAt = { movement: 0, gps: 0, compass: 0 };
+let lastPos = null;
+
+function bearingBetween(lat1, lon1, lat2, lon2) {
+  const toRad = d => d * Math.PI / 180;
+  const toDeg = r => r * 180 / Math.PI;
+  const y = Math.sin(toRad(lon2 - lon1)) * Math.cos(toRad(lat2));
+  const x = Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) -
+            Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(toRad(lon2 - lon1));
+  return (toDeg(Math.atan2(y, x)) + 360) % 360;
+}
 
 function updateUserHeading(heading, source) {
   if (heading == null || Number.isNaN(heading)) return;
-  if (source === 'compass' && lastHeadingSource === 'gps') return; // GPS wins while moving
-  lastHeadingSource = source;
+  const now = Date.now();
+  headingUpdatedAt[source] = now;
+
+  for (const better of ['movement', 'gps']) {
+    if (better === source) break;
+    if (now - headingUpdatedAt[better] < HEADING_STALE_MS[better]) return;
+  }
+
   if (!userMarker) return;
   const el = userMarker.getElement();
-  const cone = el && el.querySelector('.user-cone');
-  if (cone) {
-    cone.style.display = 'block';
-    cone.style.transform = `translate(-50%, -100%) rotate(${heading}deg)`;
-  }
+  const group = el && el.querySelector('.user-heading-group');
+  if (group) group.style.transform = `rotate(${heading}deg)`;
 }
 
 function handleOrientation(event) {
@@ -207,11 +226,25 @@ function onPosition(pos) {
   } else if (userMarker) {
     userMarker.setLatLng([latitude, longitude]);
   }
+
+  // Highest priority: bearing between the last fix and this one. Only
+  // trust it once we've actually moved a meaningful distance, otherwise
+  // GPS jitter would make the arrow spin in place while standing still.
+  if (lastPos) {
+    const moved = haversineM(lastPos.lat, lastPos.lon, latitude, longitude);
+    if (moved >= 3) {
+      const bearing = bearingBetween(lastPos.lat, lastPos.lon, latitude, longitude);
+      updateUserHeading(bearing, 'movement');
+      lastPos = { lat: latitude, lon: longitude };
+    }
+  } else {
+    lastPos = { lat: latitude, lon: longitude };
+  }
+
   if (heading != null && !Number.isNaN(heading)) {
     updateUserHeading(heading, 'gps');
-  } else {
-    lastHeadingSource = null; // GPS lost its fix on heading - let compass take over again
   }
+
   postJSON('/location/update', { lat: latitude, lon: longitude });
   checkNearbyBadges(latitude, longitude);
 }
