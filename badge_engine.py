@@ -53,9 +53,9 @@ def _pick_rarity(rng):
     return _RARITY_TIERS[0][0], _RARITY_TIERS[0][2]
 
 
-def _flavor_for(count, weather):
+def _flavor_for(count, weather, rarities):
     try:
-        flavors = azure_agent.generate_badges_json(count, weather)
+        flavors = azure_agent.generate_badges_json(count, weather, rarities=rarities)
         if isinstance(flavors, list) and len(flavors) >= count:
             return flavors[:count]
     except Exception:
@@ -70,14 +70,19 @@ def spawn_badges(origin_lat, origin_lon, weather=None, count=6, seed=None):
     the origin. They stay put once spawned - the user has to walk to
     them, they never follow the user (Pokemon-Go style)."""
     rng = random.Random(seed)
-    flavors = _flavor_for(count, weather)
+
+    # Rarity is decided before asking the AI for flavor text (not after,
+    # like before) so the agent can actually write toward it - a rare
+    # badge reads as more special, not just rendered with a gold border.
+    rarity_points = [_pick_rarity(rng) for _ in range(count)]
+    rarities = [rarity for rarity, _ in rarity_points]
+    flavors = _flavor_for(count, weather, rarities)
 
     badges = []
-    for flavor in flavors:
+    for flavor, (rarity, points) in zip(flavors, rarity_points):
         distance_m = rng.uniform(80, 400)
         bearing_deg = rng.uniform(0, 360)
         lat, lon = _offset_point(origin_lat, origin_lon, distance_m, bearing_deg)
-        rarity, points = _pick_rarity(rng)
         badges.append({
             "name": flavor.get("name", "Mystery Badge"),
             "icon": flavor.get("icon", "🏅"),

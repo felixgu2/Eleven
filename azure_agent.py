@@ -107,21 +107,36 @@ def generate_weekly_summary(context_text):
     )
 
 
-def generate_badges_json(count, weather=None):
+def generate_badges_json(count, weather=None, rarities=None):
     """Ask the agent for `count` collectible walking-badge ideas (name,
     icon, description). This isn't one of the agent's two documented
     modes, but it follows ad-hoc JSON instructions fine in practice;
-    callers should still have a procedural fallback for robustness."""
+    callers should still have a procedural fallback for robustness.
+
+    rarities, if given, is a list of length `count` (e.g. ["common",
+    "rare", ...]) - passed in so the writing itself reflects rarity
+    (rare badges sounding more special) rather than rarity being a coat
+    of paint applied after the fact to tone-blind descriptions."""
     weather_clause = f" It's currently {weather['label'].lower()} outside." if weather else ""
+    if rarities:
+        rarity_clause = (
+            "\n\nEach badge has a rarity, listed in order: " + ", ".join(rarities) + ". "
+            "Match the writing's excitement to the rarity: common badges should read simple, "
+            "warm, and everyday; uncommon a bit more special; rare badges should sound genuinely "
+            "exciting and elevated - more vivid and celebratory, like finding something special. "
+            "Still keep every description to one sentence under 15 words."
+        )
+    else:
+        rarity_clause = ""
     prompt = (
         f"generate_badges\n\n"
         f"Generate {count} fun, unique collectible badge ideas for a walking/movement "
         f"gamification feature in a physical-recovery app (Pokemon-Go-style badges placed "
-        f"on a map for a user to walk to).{weather_clause}\n\n"
+        f"on a map for a user to walk to).{weather_clause}{rarity_clause}\n\n"
         f"Return ONLY a JSON array (no commentary, no code fences) of exactly {count} objects, "
-        f"each with keys: name (2-4 words), icon (a single emoji), description (one encouraging "
-        f"sentence under 15 words). Theme it around nature, movement, recovery, and small wins. "
-        f"No duplicates."
+        f"in the same order as the rarities listed above, each with keys: name (2-4 words), "
+        f"icon (a single emoji), description (one sentence under 15 words). Theme it around "
+        f"nature, movement, recovery, and small wins. No duplicates."
     )
     raw = _call_agent([{"type": "message", "role": "user", "content": prompt}])
     return json.loads(_strip_code_fence(raw))
