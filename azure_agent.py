@@ -17,13 +17,24 @@ AZURE_AI_KEY = os.environ["AZURE_AI_KEY"]
 AGENT_NAME = os.environ.get("AZURE_AI_AGENT_NAME", "care67")
 AGENT_VERSION = os.environ.get("AZURE_AI_AGENT_VERSION", "1")
 
+# Weekly summaries use their own dedicated agent (separately configured
+# with its own instructions in Azure AI Foundry) rather than sharing
+# care67's ad-hoc mode-switching prompts - falls back to the main agent
+# if a dedicated one hasn't been set up.
+WEEKLY_AGENT_NAME = os.environ.get("AZURE_AI_WEEKLY_AGENT_NAME", AGENT_NAME)
+WEEKLY_AGENT_VERSION = os.environ.get("AZURE_AI_WEEKLY_AGENT_VERSION", AGENT_VERSION)
+
 _RESPONSES_URL = f"{AZURE_AI_ENDPOINT}/openai/v1/responses"
 
 
-def _call_agent(input_messages):
+def _call_agent(input_messages, agent_name=None, agent_version=None):
     body = {
         "input": input_messages,
-        "agent_reference": {"type": "agent_reference", "name": AGENT_NAME, "version": AGENT_VERSION},
+        "agent_reference": {
+            "type": "agent_reference",
+            "name": agent_name or AGENT_NAME,
+            "version": agent_version or AGENT_VERSION,
+        },
     }
     req = urllib.request.Request(
         _RESPONSES_URL,
@@ -81,6 +92,19 @@ def generate_mission_json(context_text):
     )
     raw = _call_agent([{"type": "message", "role": "user", "content": prompt}])
     return json.loads(_strip_code_fence(raw))
+
+
+def generate_weekly_summary(context_text):
+    """Ask the dedicated weekly-summary agent for a short prose recap of
+    the user's last 7 days, given the same stats context used for
+    missions/Coach. That agent's own instructions (set in Azure AI
+    Foundry) already cover tone and format, so this just hands over the
+    raw numbers rather than re-explaining the task in the prompt each
+    time. Returns raw text, not JSON."""
+    return _call_agent(
+        [{"type": "message", "role": "user", "content": context_text}],
+        agent_name=WEEKLY_AGENT_NAME, agent_version=WEEKLY_AGENT_VERSION,
+    )
 
 
 def generate_badges_json(count, weather=None):

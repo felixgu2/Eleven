@@ -17,6 +17,13 @@
   </div>
 </div>
 
+{% if weekly_summary %}
+<div class="card">
+  <h3>🗓️ This Week</h3>
+  <p style="font-size:14px; line-height:1.5; color:var(--text); margin:0;">{{ weekly_summary }}</p>
+</div>
+{% endif %}
+
 <div class="card">
   <h3>Health Snapshot</h3>
   {% if user['bmi'] %}

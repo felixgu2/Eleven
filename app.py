@@ -305,6 +305,49 @@ def mission_context_text(stats):
     return "\n".join(lines)
 
 
+def weekly_summary_context_text(stats):
+    lines = list(weekly_breakdown_text(stats))
+    if stats["mission_history"]:
+        lines.append(
+            f"Completed {stats['missions_completed']} of {len(stats['mission_history'])} "
+            f"assigned missions in the last {MISSION_HISTORY_DAYS} days."
+        )
+    else:
+        lines.append("No mission history yet this week.")
+    badges_this_week = stats["badges_today"] + stats["badges_yesterday"]
+    if badges_this_week:
+        lines.append(f"Claimed at least {badges_this_week} walking badge(s) recently.")
+    if stats["profile"].get("points"):
+        lines.append(f"Total lifetime points: {stats['profile']['points']}.")
+    return "\n".join(lines)
+
+
+_FALLBACK_WEEKLY_SUMMARY = (
+    "Every week is a fresh start - keep opening the Walking Map and checking in "
+    "with your Coach, and this recap will fill in as your activity builds up."
+)
+
+
+def get_or_create_weekly_summary(sb, user_id, stats):
+    row = maybe_row(sb.table("weekly_summaries").select("*")
+        .eq("user_id", user_id).eq("date", today_str()).maybe_single())
+    if row:
+        return row["summary"]
+
+    try:
+        summary = azure_agent.generate_weekly_summary(weekly_summary_context_text(stats))
+    except Exception:
+        summary = _FALLBACK_WEEKLY_SUMMARY
+
+    sb.table("weekly_summaries").upsert({
+        "user_id": user_id, "date": today_str(), "summary": summary,
+    }, on_conflict="user_id,date", ignore_duplicates=True).execute()
+
+    row = maybe_row(sb.table("weekly_summaries").select("*")
+        .eq("user_id", user_id).eq("date", today_str()).maybe_single())
+    return row["summary"] if row else summary
+
+
 def current_weather():
     loc = user_location()
     if loc:
@@ -660,6 +703,10 @@ def profile():
     age = calculate_age(profile_data.get("date_of_birth"))
     achievements = g.sb.table("badges").select("*") \
         .eq("user_id", g.user_id).eq("status", "claimed").order("claimed_at", desc=True).execute().data
+
+    stats = collect_user_stats(g.sb, g.user_id, profile_data, current_weather())
+    weekly_summary = get_or_create_weekly_summary(g.sb, g.user_id, stats)
+
     return render_template(
         "profile.html",
         user=profile_data,
@@ -667,6 +714,7 @@ def profile():
         age=age,
         bmi_label=bmi_category(profile_data.get("bmi")),
         achievements=achievements,
+        weekly_summary=weekly_summary,
     )
 
 

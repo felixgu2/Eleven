@@ -212,3 +212,23 @@ end;
 $$;
 
 grant execute on function public.increment_daily_distance(uuid, date, double precision) to authenticated;
+
+-- AI-written recap of the last 7 days (steps, badges, missions), shown as
+-- a "This Week" card on the Profile page. Cached once per calendar day
+-- (like missions) instead of regenerated on every page view, since the
+-- underlying week barely shifts within a single day.
+create table if not exists public.weekly_summaries (
+    user_id uuid not null references auth.users (id) on delete cascade,
+    date date not null,
+    summary text not null,
+    created_at timestamptz not null default now(),
+    primary key (user_id, date)
+);
+
+alter table public.weekly_summaries enable row level security;
+drop policy if exists "Users manage their own weekly summaries" on public.weekly_summaries;
+create policy "Users manage their own weekly summaries"
+    on public.weekly_summaries
+    for all
+    using (auth.uid() = user_id)
+    with check (auth.uid() = user_id);
