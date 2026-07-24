@@ -36,6 +36,11 @@
   {% endif %}
   {% if mission['safety_note'] %}<p class="mission-safety-light">⚠️ {{ mission['safety_note'] }}</p>{% endif %}
   {% if mission['encouragement'] %}<p style="font-style:italic; color:var(--text-muted); font-size:13px;">{{ mission['encouragement'] }}</p>{% endif %}
+  {% if mission['completed'] %}
+  <div class="mission-complete-chip" id="mission-complete-chip">✅ Completed</div>
+  {% else %}
+  <button class="btn btn-primary btn-sm" id="mission-complete-btn">Mark as Complete</button>
+  {% endif %}
 </div>
 {% endif %}
 
@@ -56,6 +61,22 @@ if (navigator.geolocation) {
       }
     });
   }, () => { /* no permission yet - keep the city-based weather shown */ }, { maximumAge: 300000 });
+}
+
+const missionCompleteBtn = document.getElementById('mission-complete-btn');
+if (missionCompleteBtn) {
+  missionCompleteBtn.addEventListener('click', async () => {
+    missionCompleteBtn.disabled = true;
+    const res = await postJSON('/mission/complete', {});
+    if (res.ok) {
+      const chip = document.createElement('div');
+      chip.className = 'mission-complete-chip';
+      chip.textContent = '✅ Completed';
+      missionCompleteBtn.replaceWith(chip);
+    } else {
+      missionCompleteBtn.disabled = false;
+    }
+  });
 }
 </script>
 {% endblock %}

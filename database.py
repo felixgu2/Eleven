@@ -16,8 +16,20 @@ def init_db():
     conn = get_connection()
     with open(SCHEMA_PATH) as f:
         conn.executescript(f.read())
+    _migrate(conn)
     conn.commit()
     conn.close()
+
+
+def _migrate(conn):
+    """Lightweight, additive migrations for columns added after a table
+    already existed - CREATE TABLE IF NOT EXISTS above won't add them to
+    a database that was created before this column existed."""
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(missions)")}
+    if "completed" not in columns:
+        conn.execute("ALTER TABLE missions ADD COLUMN completed INTEGER NOT NULL DEFAULT 0")
+    if "completed_at" not in columns:
+        conn.execute("ALTER TABLE missions ADD COLUMN completed_at TEXT")
 
 
 def seed_new_account(conn, user_id, name):

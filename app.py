@@ -157,6 +157,108 @@ def today_activity(db, user_id):
     return round(distance_m / STEP_LENGTH_M), distance_m
 
 
+ACTIVE_DAY_DISTANCE_M = 200  # a day counts as "active" for trend purposes past this much walked
+MISSION_HISTORY_DAYS = 7
+
+
+def collect_user_stats(db, user_id, profile, weather_now):
+    """Single source of truth for 'what do we know about this user right
+    now' - built once and consumed by both the daily mission generator
+    and the AI Coach, so the two always reason from the same numbers and
+    a mission actually completed (or skipped) yesterday shapes both
+    today's mission and how the Coach talks about it."""
+    yesterday = (local_today() - timedelta(days=1)).isoformat()
+    week_ago = (local_today() - timedelta(days=MISSION_HISTORY_DAYS)).isoformat()
+
+    steps_today, distance_today_m = today_activity(db, user_id)
+    yesterday_distance_m = (db.execute(
+        "SELECT distance_m FROM daily_activity WHERE user_id = ? AND session_date = ?",
+        (user_id, yesterday),
+    ).fetchone() or {"distance_m": 0})["distance_m"]
+
+    active_days_last_week = db.execute(
+        "SELECT COUNT(*) AS c FROM daily_activity WHERE user_id = ? AND session_date >= ? AND distance_m >= ?",
+        (user_id, week_ago, ACTIVE_DAY_DISTANCE_M),
+    ).fetchone()["c"]
+
+    badges_today = db.execute(
+        "SELECT COUNT(*) AS c FROM badges WHERE user_id = ? AND session_date = ? AND status = 'claimed'",
+        (user_id, today_str()),
+    ).fetchone()["c"]
+    badges_yesterday = db.execute(
+        "SELECT COUNT(*) AS c FROM badges WHERE user_id = ? AND session_date = ? AND status = 'claimed'",
+        (user_id, yesterday),
+    ).fetchone()["c"]
+
+    mission_history = db.execute(
+        "SELECT date, title, category, completed FROM missions "
+        "WHERE user_id = ? AND date >= ? AND date < ? ORDER BY date",
+        (user_id, week_ago, today_str()),
+    ).fetchall()
+    today_mission = db.execute(
+        "SELECT title, completed FROM missions WHERE user_id = ? AND date = ?",
+        (user_id, today_str()),
+    ).fetchone()
+
+    return {
+        "profile": profile,
+        "weather_now": weather_now,
+        "steps_today": steps_today,
+        "distance_today_m": distance_today_m,
+        "yesterday_steps": round(yesterday_distance_m / STEP_LENGTH_M),
+        "yesterday_distance_m": yesterday_distance_m,
+        "active_days_last_week": active_days_last_week,
+        "badges_today": badges_today,
+        "badges_yesterday": badges_yesterday,
+        "mission_history": mission_history,
+        "missions_completed": sum(1 for r in mission_history if r["completed"]),
+        "today_mission": today_mission,
+    }
+
+
+def mission_context_text(stats):
+    profile = stats["profile"]
+    lines = [
+        "Design today's mission specifically for this person using the stats below - "
+        "don't give a generic one-size-fits-all plan. If they've been inactive lately or "
+        "skipping missions, favor something easier and more encouraging to rebuild "
+        "momentum; if they've been consistently active and completing missions, it's fine "
+        "to make it a bit more challenging or varied. Avoid repeating the same category "
+        "as recent missions unless it makes sense.",
+    ]
+    age = calculate_age(profile.get("date_of_birth"))
+    if age:
+        lines.append(f"User age: {age}.")
+    if profile.get("bmi"):
+        lines.append(f"BMI: {profile['bmi']} ({bmi_category(profile['bmi'])}).")
+    if profile.get("activity_level"):
+        lines.append(f"Usual activity level: {profile['activity_level']}.")
+    if stats["yesterday_distance_m"]:
+        lines.append(f"Yesterday: {stats['yesterday_steps']} steps (~{stats['yesterday_distance_m'] / 1000:.1f} km walked).")
+    else:
+        lines.append("Yesterday: no recorded walking activity.")
+    if stats["badges_yesterday"]:
+        lines.append(f"Claimed {stats['badges_yesterday']} walking badge(s) yesterday.")
+    lines.append(f"Active (walked a meaningful distance) on {stats['active_days_last_week']} of the last {MISSION_HISTORY_DAYS} days.")
+    if stats["mission_history"]:
+        lines.append(
+            f"Completed {stats['missions_completed']} of {len(stats['mission_history'])} "
+            f"assigned missions in the last {MISSION_HISTORY_DAYS} days."
+        )
+        recent = ", ".join(
+            f"{r['title']} ({'completed' if r['completed'] else 'not completed'})"
+            for r in stats["mission_history"][-3:]
+        )
+        lines.append(f"Most recent missions: {recent}.")
+    else:
+        lines.append("No prior mission history yet - this is a new or returning user.")
+    if profile.get("points"):
+        lines.append(f"Total points earned so far: {profile['points']}.")
+    if stats["weather_now"]:
+        lines.append(f"Today's weather: {stats['weather_now']['label']}, {stats['weather_now']['temp_f']}°F.")
+    return "\n".join(lines)
+
+
 def current_weather():
     loc = user_location()
     if loc:
@@ -186,36 +288,15 @@ _FALLBACK_MISSION = {
 }
 
 
-def get_or_create_mission(db, user_id, profile, weather_now):
+def get_or_create_mission(db, user_id, stats):
     row = db.execute(
         "SELECT * FROM missions WHERE user_id = ? AND date = ?", (user_id, today_str())
     ).fetchone()
     if row:
         return row
 
-    yesterday = (local_today() - timedelta(days=1)).isoformat()
-    badges_yesterday = db.execute(
-        "SELECT COUNT(*) AS c FROM badges WHERE user_id = ? AND session_date = ? AND status = 'claimed'",
-        (user_id, yesterday),
-    ).fetchone()["c"]
-
-    context_lines = []
-    age = calculate_age(profile.get("date_of_birth"))
-    if age:
-        context_lines.append(f"User age: {age}.")
-    if profile.get("bmi"):
-        context_lines.append(f"BMI: {profile['bmi']} ({bmi_category(profile['bmi'])}).")
-    if profile.get("activity_level"):
-        context_lines.append(f"Usual activity level: {profile['activity_level']}.")
-    if badges_yesterday:
-        context_lines.append(f"Claimed {badges_yesterday} walking badge(s) yesterday - stayed active.")
-    else:
-        context_lines.append("Didn't claim any walking badges yesterday.")
-    if weather_now:
-        context_lines.append(f"Today's weather: {weather_now['label']}, {weather_now['temp_f']}°F.")
-
     try:
-        mission = azure_agent.generate_mission_json("\n".join(context_lines))
+        mission = azure_agent.generate_mission_json(mission_context_text(stats))
     except Exception:
         mission = _FALLBACK_MISSION
 
@@ -407,15 +488,14 @@ def dashboard():
     user_id = g.user_id
 
     weather_now = current_weather()
-    mission_row = get_or_create_mission(db, user_id, g.profile, weather_now)
+    stats = collect_user_stats(db, user_id, g.profile, weather_now)
+    mission_row = get_or_create_mission(db, user_id, stats)
     mission = dict(mission_row)
     mission["instructions"] = json.loads(mission["instructions"]) if mission["instructions"] else []
 
-    badges_today = db.execute(
-        "SELECT status FROM badges WHERE user_id = ? AND session_date = ?", (user_id, today_str())
-    ).fetchall()
-    badges_claimed = sum(1 for b in badges_today if b["status"] == "claimed")
-    steps, _ = today_activity(db, user_id)
+    badges_today_total = db.execute(
+        "SELECT COUNT(*) AS c FROM badges WHERE user_id = ? AND session_date = ?", (user_id, today_str())
+    ).fetchone()["c"]
 
     return render_template(
         "dashboard.html",
@@ -423,10 +503,21 @@ def dashboard():
         greeting=greeting(),
         weather=weather_now,
         mission=mission,
-        badges_claimed=badges_claimed,
-        badges_total=len(badges_today),
-        steps=steps,
+        badges_claimed=stats["badges_today"],
+        badges_total=badges_today_total,
+        steps=stats["steps_today"],
     )
+
+
+@app.route("/mission/complete", methods=["POST"])
+def mission_complete():
+    db = get_db()
+    db.execute(
+        "UPDATE missions SET completed = 1, completed_at = ? WHERE user_id = ? AND date = ?",
+        (local_now().isoformat(), g.user_id, today_str()),
+    )
+    db.commit()
+    return {"ok": True}
 
 
 # --------------------------------------------------------------------------
@@ -436,18 +527,29 @@ def dashboard():
 COACH_HISTORY_LIMIT = 20
 
 
-def coach_stats_context(profile, steps, distance_m, badges_claimed_today, weather_now):
+def coach_stats_context(stats):
+    profile = stats["profile"]
     lines = [
         "You are replying inside a short chat bubble UI, not writing a report. "
         "Keep replies SHORT and SIMPLE: 1-3 sentences, plain conversational language, "
         "no headers or bullet lists unless the user explicitly asks for a list. "
         "Ground your answer in the stats below whenever the question relates to them "
-        "(e.g. steps, activity, progress) instead of speaking generically.",
-        f"Today so far: {steps} steps (~{distance_m / 1000:.1f} km walked), "
-        f"{badges_claimed_today} walking badge(s) claimed, {profile.get('points') or 0} total points.",
+        "(e.g. steps, activity, progress, missions) instead of speaking generically. If "
+        "you notice a pattern worth flagging (missed missions, a low-activity streak), "
+        "gently point it out with one concrete suggestion rather than just reciting numbers.",
+        f"Today so far: {stats['steps_today']} steps (~{stats['distance_today_m'] / 1000:.1f} km walked), "
+        f"{stats['badges_today']} walking badge(s) claimed, {profile.get('points') or 0} total points.",
     ]
-    if weather_now:
-        lines.append(f"Weather right now: {weather_now['label']}, {weather_now['temp_f']}°F.")
+    if stats["today_mission"]:
+        status = "completed" if stats["today_mission"]["completed"] else "not marked complete yet"
+        lines.append(f"Today's mission: \"{stats['today_mission']['title']}\" - {status}.")
+    if stats["mission_history"]:
+        lines.append(
+            f"Completed {stats['missions_completed']} of {len(stats['mission_history'])} "
+            f"assigned missions in the last {MISSION_HISTORY_DAYS} days."
+        )
+    if stats["weather_now"]:
+        lines.append(f"Weather right now: {stats['weather_now']['label']}, {stats['weather_now']['temp_f']}°F.")
     return "\n".join(lines)
 
 
@@ -484,14 +586,8 @@ def coach_message():
         for r in reversed(history_rows)
     ]
 
-    steps, distance_m = today_activity(db, user_id)
-    badges_claimed_today = db.execute(
-        "SELECT COUNT(*) AS c FROM badges WHERE user_id = ? AND session_date = ? AND status = 'claimed'",
-        (user_id, today_str()),
-    ).fetchone()["c"]
-    context_text = coach_stats_context(
-        g.profile, steps, distance_m, badges_claimed_today, current_weather()
-    )
+    stats = collect_user_stats(db, user_id, g.profile, current_weather())
+    context_text = coach_stats_context(stats)
 
     try:
         reply = azure_agent.coach_reply(history, context_text=context_text)

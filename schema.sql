@@ -16,6 +16,9 @@ CREATE INDEX IF NOT EXISTS idx_coach_messages_user ON coach_messages (user_id);
 
 -- One AI-generated mission per user per day, cached so it stays stable on
 -- reload. Fields mirror the structured JSON the Azure AI agent returns.
+-- completed is set only by the user's own "Mark as Complete" action (see
+-- /mission/complete in app.py) - never inferred automatically - and feeds
+-- back into future missions and Coach answers as adherence history.
 CREATE TABLE IF NOT EXISTS missions (
     user_id TEXT NOT NULL,
     date TEXT NOT NULL,
@@ -29,6 +32,8 @@ CREATE TABLE IF NOT EXISTS missions (
     safety_note TEXT,
     alternative_mission TEXT,
     encouragement TEXT,
+    completed INTEGER NOT NULL DEFAULT 0,
+    completed_at TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (user_id, date)
 );

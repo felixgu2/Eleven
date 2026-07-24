@@ -79,7 +79,7 @@ def generate_mission_json(context_text):
         "generate_mission\n\n" + context_text +
         "\n\nReturn only the JSON object described in your instructions, with no extra commentary."
     )
-    raw = _call_agent([{"role": "user", "content": prompt}])
+    raw = _call_agent([{"type": "message", "role": "user", "content": prompt}])
     return json.loads(_strip_code_fence(raw))
 
 
@@ -99,5 +99,5 @@ def generate_badges_json(count, weather=None):
         f"sentence under 15 words). Theme it around nature, movement, recovery, and small wins. "
         f"No duplicates."
     )
-    raw = _call_agent([{"role": "user", "content": prompt}])
+    raw = _call_agent([{"type": "message", "role": "user", "content": prompt}])
     return json.loads(_strip_code_fence(raw))
