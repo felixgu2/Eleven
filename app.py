@@ -559,9 +559,32 @@ def coach_stats_context(stats):
         "(e.g. steps, activity, progress, missions) instead of speaking generically. If "
         "you notice a pattern worth flagging (missed missions, a low-activity streak), "
         "gently point it out with one concrete suggestion rather than just reciting numbers.",
-        f"Today so far: {stats['steps_today']} steps (~{stats['distance_today_m'] / 1000:.1f} km walked), "
-        f"{stats['badges_today']} walking badge(s) claimed, {profile.get('points') or 0} total points.",
     ]
+
+    age = calculate_age(profile.get("date_of_birth"))
+    profile_bits = []
+    if age:
+        profile_bits.append(f"age {age}")
+    if profile.get("height_cm"):
+        profile_bits.append(f"height {profile['height_cm']} cm")
+    if profile.get("weight_kg"):
+        profile_bits.append(f"weight {profile['weight_kg']} kg")
+    if profile.get("bmi"):
+        profile_bits.append(f"BMI {profile['bmi']} ({bmi_category(profile['bmi'])})")
+    if profile.get("activity_level"):
+        profile_bits.append(f"usual activity level {profile['activity_level']}")
+    if profile_bits:
+        lines.append(f"About {profile.get('name') or 'the user'}: " + ", ".join(profile_bits) + ".")
+    else:
+        lines.append(
+            "No height/weight/age on file yet - if asked for BMI or similar, tell the "
+            "user to add their measurements in the Profile page first."
+        )
+
+    lines.append(
+        f"Today so far: {stats['steps_today']} steps (~{stats['distance_today_m'] / 1000:.1f} km walked), "
+        f"{stats['badges_today']} walking badge(s) claimed, {profile.get('points') or 0} total points."
+    )
     lines.extend(weekly_breakdown_text(stats))
     if stats["today_mission"]:
         status = "completed" if stats["today_mission"]["completed"] else "not marked complete yet"
