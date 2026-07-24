@@ -30,7 +30,9 @@ ACTIVITY_LEVELS = [
     ("very_active", "Very active (physical job or 2x/day training)"),
 ]
 
-DAILY_BADGE_COUNT = 6
+DAILY_BADGE_COUNT = 6       # hard cap on badges spawned (and therefore claimable) per user per day
+BADGE_TOPUP_BATCH = 1       # add one at a time so new badges feel like a gradual discovery
+BADGE_INITIAL_BATCH = 2     # first spawn of the day gives a couple of choices right away
 
 
 # --------------------------------------------------------------------------
@@ -467,6 +469,14 @@ def map_page():
 
 @app.route("/badges/spawn", methods=["POST"])
 def badges_spawn():
+    """Called on page load and again periodically as the user walks (the
+    frontend throttles this to roughly once per BADGE_TOPUP_DISTANCE_M
+    walked), so new badges keep appearing nearby to choose from instead
+    of a single fixed batch dropped at the start. Every user gets at
+    most DAILY_BADGE_COUNT badges total per day (spawned across any
+    number of calls) - since claiming requires a spawned badge, this
+    also caps the number of claims/points a user can earn from the map
+    each day."""
     db = get_db()
     user_id = g.user_id
     payload = request.get_json(silent=True) or {}
@@ -474,24 +484,28 @@ def badges_spawn():
     if lat is None or lon is None:
         return {"ok": False, "error": "location required"}, 400
 
-    existing = db.execute(
+    existing = [dict(r) for r in db.execute(
         "SELECT * FROM badges WHERE user_id = ? AND session_date = ? ORDER BY id",
         (user_id, today_str()),
-    ).fetchall()
-    if existing:
-        return {"ok": True, "badges": [dict(r) for r in existing]}
+    ).fetchall()]
+    total_today = len(existing)
 
-    weather_now = get_weather_by_coords(lat, lon)
-    spawned = badge_engine.spawn_badges(lat, lon, weather=weather_now, count=DAILY_BADGE_COUNT)
-    for b in spawned:
-        db.execute(
-            """INSERT INTO badges (user_id, session_date, name, icon, description, rarity,
-               lat, lon, radius_m, points, status)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')""",
-            (user_id, today_str(), b["name"], b["icon"], b["description"], b["rarity"],
-             b["lat"], b["lon"], b["radius_m"], b["points"]),
-        )
-    db.commit()
+    remaining_slots = DAILY_BADGE_COUNT - total_today
+    if remaining_slots > 0:
+        batch = BADGE_INITIAL_BATCH if total_today == 0 else BADGE_TOPUP_BATCH
+        batch = min(batch, remaining_slots)
+        weather_now = get_weather_by_coords(lat, lon)
+        spawned = badge_engine.spawn_badges(lat, lon, weather=weather_now, count=batch)
+        for b in spawned:
+            db.execute(
+                """INSERT INTO badges (user_id, session_date, name, icon, description, rarity,
+                   lat, lon, radius_m, points, status)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')""",
+                (user_id, today_str(), b["name"], b["icon"], b["description"], b["rarity"],
+                 b["lat"], b["lon"], b["radius_m"], b["points"]),
+            )
+        db.commit()
+
     rows = db.execute(
         "SELECT * FROM badges WHERE user_id = ? AND session_date = ? ORDER BY id",
         (user_id, today_str()),

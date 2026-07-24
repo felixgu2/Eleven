@@ -219,6 +219,37 @@ async function checkNearbyBadges(lat, lon) {
   }
 }
 
+// --- Dynamic badge top-up ---
+// New badges keep appearing near wherever the user currently is as they
+// walk (instead of one fixed batch dropped at the start), so there's
+// always a small handful to choose between. The server enforces the
+// real caps (6 spawned/claimable per day) - this just decides *when* to
+// ask for more: on load, and again once we've walked a fair distance.
+const BADGE_TOPUP_DISTANCE_M = 40;
+let lastTopupPos = null;
+let topupInFlight = false;
+
+function mergeNewBadges(freshBadges) {
+  const known = new Set(badges.map(b => b.id));
+  const added = freshBadges.filter(b => !known.has(b.id));
+  badges = freshBadges;
+  added.forEach(plotBadge);
+  if (added.length) updateStatusPill();
+}
+
+async function maybeTopUpBadges(lat, lon) {
+  if (topupInFlight) return;
+  if (lastTopupPos && haversineM(lastTopupPos.lat, lastTopupPos.lon, lat, lon) < BADGE_TOPUP_DISTANCE_M) return;
+  topupInFlight = true;
+  lastTopupPos = { lat, lon };
+  try {
+    const res = await postJSON('/badges/spawn', { lat, lon });
+    if (res.badges) mergeNewBadges(res.badges);
+  } finally {
+    topupInFlight = false;
+  }
+}
+
 function onPosition(pos) {
   const { latitude, longitude, heading } = pos.coords;
   if (!map) {
@@ -247,6 +278,7 @@ function onPosition(pos) {
 
   postJSON('/location/update', { lat: latitude, lon: longitude });
   checkNearbyBadges(latitude, longitude);
+  maybeTopUpBadges(latitude, longitude);
 }
 
 function onPositionError() {
@@ -254,19 +286,24 @@ function onPositionError() {
     '<div class="empty-state" style="padding:60px 20px;">Location access is needed to show the walking map. Please allow location access and reload this page.</div>';
 }
 
+// Poll for a fresh fix every few seconds instead of relying solely on
+// watchPosition - on many browsers/OSes watchPosition's callback is
+// throttled or stalls entirely (network-based location, power saving),
+// which made the marker look "stuck" until the page was reloaded.
+// maximumAge: 0 forces each poll to get a real fresh reading.
+const POSITION_POLL_MS = 4000;
+
+function pollPosition() {
+  navigator.geolocation.getCurrentPosition(onPosition, () => {}, {
+    enableHighAccuracy: true, maximumAge: 0, timeout: 8000,
+  });
+}
+
 if (!navigator.geolocation) {
   onPositionError();
-} else if (badges.length > 0) {
-  navigator.geolocation.getCurrentPosition(onPosition, onPositionError, { enableHighAccuracy: true });
-  navigator.geolocation.watchPosition(onPosition, () => {}, { enableHighAccuracy: true, maximumAge: 5000 });
 } else {
-  navigator.geolocation.getCurrentPosition(async (pos) => {
-    const { latitude, longitude } = pos.coords;
-    const res = await postJSON('/badges/spawn', { lat: latitude, lon: longitude });
-    badges = res.badges || [];
-    initMap(latitude, longitude);
-    navigator.geolocation.watchPosition(onPosition, () => {}, { enableHighAccuracy: true, maximumAge: 5000 });
-  }, onPositionError, { enableHighAccuracy: true });
+  navigator.geolocation.getCurrentPosition(onPosition, onPositionError, { enableHighAccuracy: true, maximumAge: 0, timeout: 8000 });
+  setInterval(pollPosition, POSITION_POLL_MS);
 }
 </script>
 {% endblock %}
