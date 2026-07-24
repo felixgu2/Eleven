@@ -13,7 +13,7 @@ import badge_engine
 from database import get_connection, init_db, seed_new_account
 from health import bmi_category, calculate_age
 from supabase_client import get_client
-from weather import get_weather, get_weather_by_coords
+from weather import get_weather, get_weather_by_coords, reverse_geocode
 
 load_dotenv()
 
@@ -135,6 +135,10 @@ def current_weather():
     if loc:
         return get_weather_by_coords(*loc)
     return get_weather(g.profile["city"])
+
+
+def get_place_name(lat, lon):
+    return reverse_geocode(lat, lon) or g.profile["city"]
 
 
 # --------------------------------------------------------------------------
@@ -311,7 +315,13 @@ def location_update():
 
 @app.route("/api/weather")
 def api_weather():
-    return current_weather()
+    weather_now = dict(current_weather())
+    loc = user_location()
+    if loc:
+        weather_now["place_name"] = get_place_name(*loc)
+    else:
+        weather_now["place_name"] = g.profile["city"]
+    return weather_now
 
 
 # --------------------------------------------------------------------------

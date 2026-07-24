@@ -1,12 +1,6 @@
 {% extends "base.html" %}
 {% block title %}CareForward - Home{% endblock %}
 {% set wide = true %}
-{% block topbar %}
-<div class="topbar wide">
-  <span style="font-size:20px;">☰</span>
-  <span></span>
-</div>
-{% endblock %}
 {% block content %}
 
 <div class="full-width" style="display:flex; justify-content:space-between; align-items:center; margin:6px 0 2px;">
@@ -55,7 +49,7 @@ if (navigator.geolocation) {
     const w = await res.json();
     const chip = document.getElementById('weather-chip');
     if (chip && w.emoji) {
-      chip.textContent = `${w.emoji} ${w.temp_f}°F · ${w.label} · your location`;
+      chip.textContent = `${w.emoji} ${w.temp_f}°F · ${w.label} · ${w.place_name || 'your area'}`;
     }
   }, () => { /* no permission yet - keep the city-based weather shown */ }, { maximumAge: 300000 });
 }

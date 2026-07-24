@@ -12,6 +12,9 @@ from datetime import date
 _CACHE_SECONDS = 1800
 _cache = {}
 
+_PLACE_CACHE_SECONDS = 21600  # place names don't change - cache longer
+_place_cache = {}
+
 _CODE_MAP = {
     0: ("Clear", "☀️"),
     1: ("Mostly Clear", "🌤️"),
@@ -109,3 +112,34 @@ def get_weather_by_coords(lat, lon):
         result = _fallback(key)
     _cache[key] = (time.time(), result)
     return result
+
+
+def reverse_geocode(lat, lon):
+    """Human-readable place name (e.g. 'Ulu Pandan, Singapore') for a
+    GPS point, via OpenStreetMap's Nominatim (free, no key). Returns
+    None if the lookup fails, so callers can fall back gracefully."""
+    key = f"{round(lat, 3)},{round(lon, 3)}"
+    cached = _place_cache.get(key)
+    if cached and time.time() - cached[0] < _PLACE_CACHE_SECONDS:
+        return cached[1]
+
+    try:
+        url = "https://nominatim.openstreetmap.org/reverse?" + urllib.parse.urlencode(
+            {"format": "json", "lat": lat, "lon": lon, "zoom": 14, "addressdetails": 1}
+        )
+        req = urllib.request.Request(url, headers={"User-Agent": "CareForward/1.0"})
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            data = json.load(resp)
+        address = data.get("address", {})
+        area = (
+            address.get("suburb") or address.get("neighbourhood")
+            or address.get("city_district") or address.get("town")
+            or address.get("village")
+        )
+        city = address.get("city") or address.get("town") or address.get("state")
+        place = ", ".join(p for p in (area, city) if p) or data.get("display_name")
+    except Exception:
+        place = None
+
+    _place_cache[key] = (time.time(), place)
+    return place

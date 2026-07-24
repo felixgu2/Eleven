@@ -5,7 +5,13 @@
 {% block head %}
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <style>
-  .app-content.no-nav { padding-bottom: 0 !important; display: flex; flex-direction: column; min-height: 0; }
+  /* Full-bleed: this page's map should dynamically fill the whole
+     viewport instead of sitting inside the site's centered content
+     column, so it always matches the actual browser window size. */
+  .app-content.no-nav {
+    padding: 0 !important; max-width: none !important;
+    display: flex; flex-direction: column; min-height: 0;
+  }
   .map-page-content { padding: 0 !important; flex: 1; display: flex; flex-direction: column; min-height: 0; }
   #map { flex: 1; width: 100%; z-index: 1; min-height: 300px; }
   .map-topbar {
@@ -86,6 +92,15 @@ function initMap(lat, lon) {
   userMarker = L.marker([lat, lon], { icon: L.divIcon({ html: '<div class="user-dot"></div>', className: '', iconSize: [18, 18] }) }).addTo(map);
   badges.forEach(plotBadge);
   updateStatusPill();
+  setTimeout(() => map.invalidateSize(), 100);
+}
+
+// Keep the map's internal size in sync with its actual container size
+// (e.g. on window resize, orientation change, or the browser chrome
+// showing/hiding) instead of it staying locked to the size at load time.
+window.addEventListener('resize', () => { if (map) map.invalidateSize(); });
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', () => { if (map) map.invalidateSize(); });
 }
 
 async function checkNearbyBadges(lat, lon) {
