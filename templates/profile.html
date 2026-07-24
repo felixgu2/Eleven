@@ -114,29 +114,13 @@
   <button type="submit" class="btn btn-primary btn-block">Save Changes</button>
 </form>
 
-<div class="field-label">Reports &amp; Tracking</div>
 <div class="settings-list" style="margin-bottom:20px;">
-  <a href="{{ url_for('report') }}">
-    <span>📄 Weekly Report</span><span class="chevron">›</span>
-  </a>
-  <a href="{{ url_for('photolog') }}">
-    <span>🩹 Wound Photo Log</span><span class="chevron">›</span>
-  </a>
-  <a href="{{ url_for('caregiver') }}">
-    <span>🧑‍⚕️ Caregiver View (demo)</span><span class="chevron">›</span>
-  </a>
   <a href="{{ url_for('map_page') }}">
     <span>🗺️ Walking Map</span><span class="chevron">›</span>
   </a>
-</div>
-
-<div class="field-label">Settings</div>
-<div class="settings-list" style="margin-bottom:20px;">
-  {% for key, label in links %}
-  <a href="{{ url_for('settings_stub', key=key) }}">
-    <span>{{ label }}</span><span class="chevron">›</span>
+  <a href="{{ url_for('coach_page') }}">
+    <span>💬 AI Coach</span><span class="chevron">›</span>
   </a>
-  {% endfor %}
 </div>
 
 <form method="post" action="{{ url_for('logout') }}">

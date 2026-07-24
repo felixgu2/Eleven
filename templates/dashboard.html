@@ -4,9 +4,7 @@
 {% block topbar %}
 <div class="topbar wide">
   <span style="font-size:20px;">☰</span>
-  <a href="{{ url_for('notifications') }}" class="icon-btn">🔔
-    {% if unread_count > 0 %}<span class="badge">{{ unread_count }}</span>{% endif %}
-  </a>
+  <span></span>
 </div>
 {% endblock %}
 {% block content %}
@@ -15,104 +13,34 @@
   <h2 style="margin:0;">{{ greeting }}, {{ user['name'] }} 👋</h2>
   <span class="points-chip">⭐ {{ user['points'] }}</span>
 </div>
-<p class="full-width" style="color:var(--text-muted); margin-top:0; font-size:14px;">Let's take care of your recovery today.</p>
+<p class="full-width" style="color:var(--text-muted); margin-top:0; font-size:14px;">Get outside, earn badges, and keep moving.</p>
 {% if weather %}
 <div class="weather-chip full-width" id="weather-chip" data-source="{{ weather.source }}">{{ weather.emoji }} {{ weather.temp_f }}°F · {{ weather.label }} · {{ user['city'] }}</div>
 {% endif %}
 
-{% if nudge %}
-<div class="nudge-banner full-width">
-  <span style="font-size:18px;">🔮</span>
-  <div>{{ nudge }}</div>
+<div class="mission-card full-width">
+  <div class="kicker">🗺️ Walking Map</div>
+  <h3>{% if badges_total %}{{ badges_claimed }} of {{ badges_total }} badges claimed today{% else %}Badges are waiting nearby{% endif %}</h3>
+  <p>{% if badges_total %}Keep exploring — more badges are still out there today.{% else %}Open the map to spawn today's badges around you and start walking.{% endif %}</p>
+  <a href="{{ url_for('map_page') }}" class="btn btn-secondary">Open Map</a>
 </div>
-{% endif %}
 
 {% if mission %}
-<div class="mission-card full-width">
-  <div class="kicker">Today's AI Mission{% if mission['duration_minutes'] %} · {{ mission['duration_minutes'] }} min{% endif %}</div>
-  <h3>{{ mission['title'] }}</h3>
-  {% if mission['goal'] %}<p>{{ mission['goal'] }}</p>{% endif %}
+<div class="card full-width">
+  <div class="card-title-row">
+    <h3>🤖 Today's AI Mission{% if mission['duration_minutes'] %} · {{ mission['duration_minutes'] }} min{% endif %}</h3>
+  </div>
+  <div style="font-weight:700; font-size:15px; margin-bottom:6px;">{{ mission['title'] }}</div>
+  {% if mission['goal'] %}<p style="font-size:13px; color:var(--text-muted); margin:0 0 12px;">{{ mission['goal'] }}</p>{% endif %}
   {% if mission['instructions'] %}
-  <ol class="mission-steps">
+  <ol class="mission-steps-light">
     {% for step in mission['instructions'] %}<li>{{ step }}</li>{% endfor %}
   </ol>
   {% endif %}
-  {% if mission['safety_note'] %}<p class="mission-safety">⚠️ {{ mission['safety_note'] }}</p>{% endif %}
-  {% if mission['encouragement'] %}<p class="mission-encouragement">{{ mission['encouragement'] }}</p>{% endif %}
-  <a href="{{ url_for('plan') if plan_items else url_for('checkin') }}" class="btn btn-secondary btn-sm">Begin Mission</a>
+  {% if mission['safety_note'] %}<p class="mission-safety-light">⚠️ {{ mission['safety_note'] }}</p>{% endif %}
+  {% if mission['encouragement'] %}<p style="font-style:italic; color:var(--text-muted); font-size:13px;">{{ mission['encouragement'] }}</p>{% endif %}
 </div>
 {% endif %}
-
-<div class="card">
-  <h3>How do you feel today?</h3>
-  <div class="choice-grid" id="mood-grid">
-    <div class="choice-pill mood-pill {% if checkin and checkin['mood']=='low' %}selected{% endif %}" data-mood="low">
-      <span class="emoji">😔</span>Low
-    </div>
-    <div class="choice-pill mood-pill {% if checkin and checkin['mood']=='okay' %}selected{% endif %}" data-mood="okay">
-      <span class="emoji">😐</span>Okay
-    </div>
-    <div class="choice-pill mood-pill {% if checkin and checkin['mood']=='good' %}selected{% endif %}" data-mood="good">
-      <span class="emoji">🙂</span>Good
-    </div>
-    <div class="choice-pill mood-pill {% if checkin and checkin['mood']=='great' %}selected{% endif %}" data-mood="great">
-      <span class="emoji">🤩</span>Great
-    </div>
-  </div>
-</div>
-
-<div class="card">
-  <h3>Today's Plan</h3>
-  {% if plan_items %}
-    <div style="font-weight:600; font-size:14px;">{{ plan_items|length }}-Activity Routine</div>
-    <div style="color:var(--text-muted); font-size:12px; margin-bottom:14px;">
-      {{ plan_items|selectattr('completed')|list|length }} of {{ plan_items|length }} done
-    </div>
-    <a href="{{ url_for('plan') }}" class="btn btn-primary btn-block">Continue Plan</a>
-  {% else %}
-    <div style="font-weight:600; font-size:14px;">10-Minute Mobility</div>
-    <div style="color:var(--text-muted); font-size:12px; margin-bottom:14px;">Low impact • No equipment</div>
-    <a href="{{ url_for('checkin') }}" class="btn btn-primary btn-block">Start Now</a>
-  {% endif %}
-</div>
-
-<div class="card">
-  <h3>Daily Progress</h3>
-  <div class="progress-ring-wrap">
-    <div class="progress-ring">
-      <svg width="90" height="90" viewBox="0 0 90 90">
-        <circle cx="45" cy="45" r="38" stroke="#e3ede8" stroke-width="9" fill="none"/>
-        <circle cx="45" cy="45" r="38" stroke="#1f8a68" stroke-width="9" fill="none"
-          stroke-dasharray="238.76" stroke-dashoffset="{{ 238.76 * (1 - progress_pct/100) }}"
-          stroke-linecap="round"/>
-      </svg>
-      <div class="pct">{{ progress_pct }}%</div>
-    </div>
-    <div>
-      <div style="font-size:12px; color:var(--text-muted);">Goal: {{ stats['goal_minutes'] }} active min</div>
-      <div class="stat-row">
-        <div>
-          <div class="stat-value">{{ stats['steps'] }}</div>
-          <div class="stat-label">Steps</div>
-        </div>
-        <div>
-          <div class="stat-value">{{ stats['active_minutes'] }} min</div>
-          <div class="stat-label">Active Minutes</div>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<div class="card">
-  <h3>🗺️ Walking Map</h3>
-  {% if badges_total %}
-    <div class="quest-status">{{ badges_claimed }} of {{ badges_total }} badges claimed today.</div>
-  {% else %}
-    <div class="quest-status">Badges are hidden nearby — walk to one and check in to claim it.</div>
-  {% endif %}
-  <a href="{{ url_for('map_page') }}" class="btn btn-secondary btn-block" style="margin-top:10px;">Open Map</a>
-</div>
 
 {% endblock %}
 {% block scripts %}
@@ -131,15 +59,5 @@ if (navigator.geolocation) {
     }
   }, () => { /* no permission yet - keep the city-based weather shown */ }, { maximumAge: 300000 });
 }
-
-document.querySelectorAll('.mood-pill').forEach(el => {
-  el.addEventListener('click', async () => {
-    document.querySelectorAll('.mood-pill').forEach(p => p.classList.remove('selected'));
-    el.classList.add('selected');
-    await postJSON("{{ url_for('dashboard_mood') }}", { mood: el.dataset.mood });
-    showToast('Mood logged');
-  });
-});
-
 </script>
 {% endblock %}
