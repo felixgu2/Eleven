@@ -1,10 +1,10 @@
 {% extends "base.html" %}
 {% import "_icons.html" as icons %}
-{% block title %}AI Coach{% endblock %}
+{% block title %}Walking Assistant{% endblock %}
 {% block topbar %}
 <div class="topbar">
   <a href="{{ url_for('dashboard') }}" class="back">{{ icons.icon('arrow-left') }}</a>
-  <h1>AI Coach</h1>
+  <h1>Walking Assistant</h1>
   <span class="points-chip">{{ icons.icon('footprints') }} {{ steps }}</span>
 </div>
 {% endblock %}
@@ -21,7 +21,17 @@
 </div>
 {% endblock %}
 {% block scripts %}
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 <script>
+// Quietly share live GPS (if already granted, or silently grantable) so the
+// assistant can ground weather and walking-route suggestions in where the
+// user actually is, instead of just their profile's self-reported city.
+if (navigator.geolocation) {
+  navigator.geolocation.getCurrentPosition((pos) => {
+    sendLocation(pos.coords.latitude, pos.coords.longitude);
+  }, () => { /* no permission yet - assistant will ask if it needs a route */ }, { maximumAge: 300000 });
+}
+
 const scrollEl = document.getElementById('chat-scroll');
 scrollEl.scrollTop = scrollEl.scrollHeight;
 

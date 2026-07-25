@@ -11,6 +11,7 @@ from supabase_auth.errors import AuthApiError
 
 import azure_agent
 import badge_engine
+import route_engine
 from health import bmi_category, calculate_age
 from supabase_client import get_client
 from weather import get_weather, get_weather_by_coords, reverse_geocode
@@ -639,6 +640,48 @@ def coach_stats_context(stats):
     return "\n".join(lines)
 
 
+_ROUTE_REQUEST_KEYWORDS = (
+    "route", "where should i walk", "where to walk", "suggest a walk",
+    "walking path", "walk path", "walking loop", "a loop", "where can i walk",
+)
+
+
+def _wants_walking_route(text):
+    lowered = text.lower()
+    return any(kw in lowered for kw in _ROUTE_REQUEST_KEYWORDS)
+
+
+def walking_route_context_text(text):
+    """If the message reads like a request for a walking route, generate
+    one for real from the user's live GPS via route_engine (routed along
+    actual streets, not a canned path) and describe it for the agent to
+    relay conversationally. Returns "" when the message isn't asking for
+    a route, so it costs nothing on unrelated messages."""
+    if not _wants_walking_route(text):
+        return ""
+    loc = user_location()
+    if not loc:
+        return (
+            "\n\nThe user just asked for a walking route, but we don't have their "
+            "location yet. Ask them to allow location access (a browser permission "
+            "prompt should appear on this page) so a real route can be suggested."
+        )
+    route = route_engine.suggest_walking_route(*loc)
+    if not route:
+        return (
+            "\n\nThe user just asked for a walking route, but the routing service "
+            "didn't respond. Let them know you couldn't generate one right now and "
+            "to try again in a moment."
+        )
+    directions = "; ".join(route["directions"])
+    return (
+        f"\n\nA real walking route was just generated from the user's current "
+        f"location: a {route['distance_km']} km loop, about {route['duration_min']} "
+        f"minutes. Turn-by-turn: {directions}. Present this conversationally in a "
+        f"couple of short sentences - don't just dump the raw direction list."
+    )
+
+
 @app.route("/coach")
 def coach_page():
     rows = g.sb.table("coach_messages").select("sender, text") \
@@ -666,7 +709,7 @@ def coach_message():
     ]
 
     stats = collect_user_stats(sb, user_id, g.profile, current_weather())
-    context_text = coach_stats_context(stats)
+    context_text = coach_stats_context(stats) + walking_route_context_text(text)
 
     try:
         reply = azure_agent.coach_reply(history, context_text=context_text)

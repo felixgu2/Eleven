@@ -26,7 +26,7 @@
 {% if mission %}
 <div class="card full-width">
   <div class="card-title-row">
-    <h3>{{ icons.icon('bot') }} Today's AI Mission{% if mission['duration_minutes'] %} · {{ mission['duration_minutes'] }} min{% endif %}</h3>
+    <h3>{{ icons.icon('bot') }} Today's Mission{% if mission['duration_minutes'] %} · {{ mission['duration_minutes'] }} min{% endif %}</h3>
   </div>
   <div style="font-weight:700; font-size:15px; margin-bottom:6px;">{{ mission['title'] }}</div>
   {% if mission['goal'] %}<p style="font-size:13px; color:var(--text-muted); margin:0 0 12px;">{{ mission['goal'] }}</p>{% endif %}
